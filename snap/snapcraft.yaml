@@ -66,6 +66,9 @@ package-repositories:
 apps:
   # Libvirt
   libvirtd:
+    environment:
+      # overriding usr/bin path to current, to ensure the symlink to qemu-system-* is not dependent on the snap revision 
+      PATH: $SNAP/../current/usr/bin:$SNAP/usr/sbin:$SNAP/usr/bin:$SNAP/sbin:$SNAP/bin:$SNAP/usr/local/bin:$SNAP/usr/local/sbin:$PATH
     command: usr/sbin/libvirtd --pid $SNAP_DATA/libvirt.pid --listen
     daemon: simple
     plugs:
