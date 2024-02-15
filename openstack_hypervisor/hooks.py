@@ -271,10 +271,11 @@ DEFAULT_CONFIG = {
     "logging.debug": False,
     "node.fqdn": socket.getfqdn,
     "node.ip-address": _get_local_ip_by_default_route,  # noqa: F821
-    # TLS
     # Telemetry
     "telemetry.enable": False,
     "telemetry.publisher-secret": UNSET,
+    # TLS
+    "ca.bundle": UNSET,
 }
 
 
@@ -831,6 +832,7 @@ def _parse_tls(snap: Snap, config_key: str) -> bytes:
     try:
         return base64.b64decode(snap.config.get(config_key))
     except (binascii.Error, TypeError):
+        logging.warning(f"Parsing failed for {config_key}")
         pass
 
 
@@ -838,6 +840,32 @@ def _configure_tls(snap: Snap) -> None:
     """Configure TLS."""
     _configure_ovn_tls(snap)
     _configure_libvirt_tls(snap)
+    _configure_cabundle_tls(snap)
+
+
+def _template_tls_file(pem: bytes, file: Path, links: List[Path], permissions: int = 0o644):
+    file.write_bytes(pem)
+    file.chmod(permissions)
+    for link in links:
+        link.unlink(missing_ok=True)
+        link.symlink_to(file)
+        link.chmod(permissions)
+
+
+def _configure_cabundle_tls(snap: Snap) -> None:
+    """Configure CA Certs."""
+    bundle = None
+    cacert_path = snap.paths.common / Path("etc/ssl/certs/receive-ca-bundle.pem")
+
+    try:
+        bundle = _parse_tls(snap, "ca.bundle")
+    except UnknownConfigKey:
+        logging.info("CA Cert configuration incomplete, skipping.")
+
+    if bundle:
+        _template_tls_file(bundle, cacert_path, [])
+    else:
+        cacert_path.unlink(missing_ok=True)
 
 
 def _configure_libvirt_tls(snap: Snap) -> None:
@@ -866,14 +894,6 @@ def _configure_libvirt_tls(snap: Snap) -> None:
     qemu_key = snap.paths.common / Path("etc/pki/qemu/server-key.pem")
     qemu_client_cert = snap.paths.common / Path("etc/pki/qemu/client-cert.pem")
     qemu_client_key = snap.paths.common / Path("etc/pki/qemu/client-key.pem")
-
-    def _template_tls_file(pem: bytes, file: Path, links: List[Path], permissions: int = 0o644):
-        file.write_bytes(pem)
-        file.chmod(permissions)
-        for link in links:
-            link.unlink(missing_ok=True)
-            link.symlink_to(file)
-            link.chmod(permissions)
 
     _template_tls_file(cacert, pki_cacert, [qemu_cacert])
     _template_tls_file(
@@ -1192,6 +1212,7 @@ def configure(snap: Snap) -> None:
         "credentials",
         "telemetry",
         "monitoring",
+        "ca",
     ).as_dict()
 
     # Add some general snap path information

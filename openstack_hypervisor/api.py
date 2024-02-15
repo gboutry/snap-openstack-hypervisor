@@ -33,6 +33,7 @@ MAPPING = {
     "logging": model.LoggingConfig,
     "telemetry": model.TelemetryConfig,
     "monitoring": model.MonitoringConfig,
+    "ca": model.CABundleConfig,
 }
 
 
@@ -150,6 +151,12 @@ async def update_telemetry(config: model.TelemetryConfig):
 async def update_monitoring(config: model.MonitoringConfig):
     """Updates monitoring section settings."""
     return _update_settings("monitoring", config)
+
+
+@app.patch("/settings/ca")
+async def update_ca_bundle(config: model.CABundleConfig):
+    """Updates ca section settings."""
+    return _update_settings("ca", config)
 
 
 @app.post("/reset")
