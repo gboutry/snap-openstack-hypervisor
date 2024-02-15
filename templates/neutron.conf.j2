@@ -40,6 +40,9 @@ user_domain_name = {{ identity.user_domain_name }}
 project_name = {{ identity.project_name }}
 username = {{ identity.username }}
 password = {{ identity.password }}
+{% if ca and ca.bundle -%}
+cafile = {{ snap_common }}/etc/ssl/certs/receive-ca-bundle.pem
+{% endif -%}
 
 [paste_deploy]
 flavor = keystone
@@ -53,6 +56,9 @@ region_name = {{ identity.region_name }}
 project_name = {{ identity.project_name }}
 username = {{ identity.username }}
 password = {{ identity.password }}
+{% if ca and ca.bundle -%}
+cafile = {{ snap_common }}/etc/ssl/certs/receive-ca-bundle.pem
+{% endif -%}
 
 [nova]
 auth_url = {{ identity.auth_url }}
@@ -63,6 +69,9 @@ region_name = {{ identity.region_name }}
 project_name = {{ identity.project_name }}
 username = {{ identity.username }}
 password = {{ identity.password }}
+{% if ca and ca.bundle -%}
+cafile = {{ snap_common }}/etc/ssl/certs/receive-ca-bundle.pem
+{% endif -%}
 
 [oslo_messaging_rabbit]
 rabbit_quorum_queue = True

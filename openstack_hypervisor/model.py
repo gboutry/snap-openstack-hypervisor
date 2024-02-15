@@ -119,3 +119,9 @@ class MonitoringConfig(BaseModel):
     """Data model for the monitoring configuration settings."""
 
     enable: bool = Field(default=False)
+
+
+class CABundleConfig(BaseModel):
+    """Data Model for CA Bundle settings for the hypervisor services."""
+
+    bundle: Optional[str] = Field(default=None)
