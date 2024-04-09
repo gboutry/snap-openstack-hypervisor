@@ -55,6 +55,8 @@ layout:
     symlink: $SNAP/usr/share/OVMF
   /usr/share/AAVMF:
     symlink: $SNAP/usr/share/AAVMF
+  /var/lib/libvirt:
+    symlink: $SNAP_DATA/var/lib/libvirt
 
 package-repositories:
   - type: apt
