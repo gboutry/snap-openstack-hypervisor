@@ -96,6 +96,7 @@ DATA_DIRS = [
     Path("lib/ovn"),
     Path("lib/neutron"),
     Path("run/hypervisor-config"),
+    Path("var/lib/libvirt/qemu"),
 ]
 SECRET_XML = string.Template(
     """
