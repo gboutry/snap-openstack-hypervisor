@@ -1,5 +1,5 @@
 name: openstack-hypervisor
-version: '2023.2'
+version: '2024.1'
 base: core22
 summary: OpenStack Hypervisor
 description: |
@@ -37,12 +37,12 @@ system-usernames:
 layout:
   /usr/local/bin:
     symlink: $SNAP/usr/local/bin
-  /usr/lib/$CRAFT_ARCH_TRIPLET/ceph:
-    symlink: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET/ceph
-  /usr/lib/$CRAFT_ARCH_TRIPLET/qemu:
-    symlink: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET/qemu
-  /usr/lib/$CRAFT_ARCH_TRIPLET/pulseaudio:
-    symlink: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET/pulseaudio
+  /usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ceph:
+    symlink: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ceph
+  /usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/qemu:
+    symlink: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/qemu
+  /usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/pulseaudio:
+    symlink: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/pulseaudio
   /usr/lib/libvirt:
     symlink: $SNAP/usr/lib/libvirt
   /usr/share/libvirt:
@@ -61,7 +61,7 @@ layout:
 package-repositories:
   - type: apt
     components: [main]
-    suites: [jammy-updates/bobcat]
+    suites: [jammy-updates/caracal]
     key-id: 391A9AA2147192839E9DB0315EDB1B62EC4926EA
     url: http://ubuntu-cloud.archive.canonical.com/ubuntu
 
