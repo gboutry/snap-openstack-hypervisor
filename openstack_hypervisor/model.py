@@ -72,7 +72,10 @@ class ComputeConfig(BaseModel):
     cpu_mode: str = Field(alias="cpu-mode", default="host-model")
     virt_type: str = Field(alias="virt-type", default="auto")
     cpu_models: Optional[str] = Field(alias="cpu-models")
-    spice_proxy_address: Optional[IPvAnyAddress] = Field(alias="spice-proxy-address")
+    spice_proxy_address: Optional[IPvAnyAddress] = Field(
+        alias="spice-proxy-address", deprecated="Use spice-proxy-url"
+    )
+    spice_proxy_url: Optional[AnyUrl] = Field(alias="spice-proxy-url")
     rbd_user: Optional[str] = Field(alias="rbd-user", default="nova")
     rbd_secret_uuid: Optional[str] = Field(alias="rbd-secret-uuid")
     rbd_key: Optional[str] = Field(alias="rbd-key")

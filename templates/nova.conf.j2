@@ -65,10 +65,17 @@ cafile = {{ snap_common }}/etc/ssl/certs/receive-ca-bundle.pem
 [spice]
 enabled = True
 agent_enabled = True
+{% if compute.spice_proxy_url -%}
+html5proxy_base_url = {{ compute.spice_proxy_url }}
+{% elif compute.spice_proxy_address -%}
 html5proxy_base_url = http://{{ compute.spice_proxy_address }}:6082/spice_auto.html
+{% endif -%}
 server_listen = {{ node.ip_address }}
 server_proxyclient_address = {{ node.ip_address }}
 keymap = en-us
+
+[vnc]
+enabled = False
 
 [glance]
 service_type = image
