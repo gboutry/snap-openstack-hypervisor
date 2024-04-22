@@ -240,7 +240,7 @@ DEFAULT_CONFIG = {
     "identity.project-domain-name": "service_domain",
     "identity.region-name": "RegionOne",
     # Messaging
-    "rabbitmq.url": "rabbit://localhost:5672",
+    "rabbitmq.url": UNSET,
     # Nova
     "compute.cpu-mode": "host-model",
     "compute.virt-type": "auto",
@@ -259,7 +259,7 @@ DEFAULT_CONFIG = {
     "network.external-bridge-address": IPVANYNETWORK_UNSET,
     "network.dns-domain": "openstack.local",
     "network.dns-servers": "8.8.8.8",
-    "network.ovn-sb-connection": "tcp:127.0.0.1:6642",
+    "network.ovn-sb-connection": UNSET,
     "network.ovn-cert": UNSET,
     "network.ovn-key": UNSET,
     "network.ovn-cacert": UNSET,
