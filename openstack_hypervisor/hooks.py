@@ -624,7 +624,10 @@ def _configure_ovn_base(snap: Snap) -> None:
             "external_ids:ovn-match-northd-version=true",
         ]
     )
-    sb_conn = snap.config.get("network.ovn-sb-connection")
+    try:
+        sb_conn = snap.config.get("network.ovn-sb-connection")
+    except UnknownConfigKey:
+        sb_conn = None
     if not sb_conn:
         logging.info("OVN SB connection URL not configured, skipping.")
         return
@@ -740,6 +743,13 @@ def _configure_ovn_external_networking(snap: Snap) -> None:
     # TODO:
     # Deal with multiple external networks.
     # Deal with wiring of hardware port to each bridge.
+    try:
+        sb_conn = snap.config.get("network.ovn-sb-connection")
+    except UnknownConfigKey:
+        sb_conn = None
+    if not sb_conn:
+        logging.info("OVN SB connection URL not configured, skipping.")
+        return
     external_bridge = snap.config.get("network.external-bridge")
     physnet_name = snap.config.get("network.physnet-name")
     try:

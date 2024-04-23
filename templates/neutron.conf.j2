@@ -10,8 +10,10 @@ use_journal = True
 log_file = {{ snap_common }}/log/neutron.log
 debug = {{ logging.debug }}
 
+{% if rabbitmq is defined %}
 # AMQP connection to RabbitMQ
 transport_url = {{ rabbitmq.url }}
+{% endif %}
 
 {% if network.dns_domain %}
 dns_domain = {{ network.dns_domain }}
