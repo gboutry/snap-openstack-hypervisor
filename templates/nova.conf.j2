@@ -17,8 +17,10 @@ debug = {{ logging.debug }}
 host = {{ node.fqdn }}
 my_ip = {{ node.ip_address }}
 
+{% if rabbitmq is defined %}
 # AMQP connection to RabbitMQ
 transport_url = {{ rabbitmq.url }}
+{% endif %}
 
 # Fix the amount of metadata workers to a sane default
 metadata_workers = 4

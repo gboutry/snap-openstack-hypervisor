@@ -4,8 +4,10 @@
 [DEFAULT]
 debug = {{ logging.debug }}
 
+{% if rabbitmq is defined %}
 # AMQP connection to RabbitMQ
 transport_url = {{ rabbitmq.url }}
+{% endif %}
 
 [polling]
 batch_size = 50
