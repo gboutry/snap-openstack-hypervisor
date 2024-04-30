@@ -87,7 +87,6 @@ class NetworkConfig(BaseModel):
     physnet_name: str = Field(alias="physnet-name", default="physnet1")
     external_bridge: str = Field(alias="external-bridge", default="br-ex")
     external_bridge_addresss: Optional[IPvAnyInterface] = Field(alias="external-bridge-address")
-    dns_domain = Field(alias="dns-domain", default="openstack.local")
     dns_servers: IPvAnyAddress = Field(alias="dns-servers", default="8.8.8.8")
     ovn_sb_connection: str = Field(alias="ovn-sb-connection", default="tcp:127.0.0.1:6642")
     ovn_key: Optional[str] = Field(alias="ovn-key")

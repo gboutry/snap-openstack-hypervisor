@@ -257,7 +257,6 @@ DEFAULT_CONFIG = {
     "network.physnet-name": "physnet1",
     "network.external-bridge": "br-ex",
     "network.external-bridge-address": IPVANYNETWORK_UNSET,
-    "network.dns-domain": "openstack.local",
     "network.dns-servers": "8.8.8.8",
     "network.ovn-sb-connection": UNSET,
     "network.ovn-cert": UNSET,
