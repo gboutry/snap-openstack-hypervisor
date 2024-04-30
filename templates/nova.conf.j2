@@ -25,6 +25,8 @@ transport_url = {{ rabbitmq.url }}
 # Fix the amount of metadata workers to a sane default
 metadata_workers = 4
 
+resume_guests_state_on_host_boot = {{ compute.resume_on_boot }}
+
 [workarounds]
 disable_rootwrap = True
 
