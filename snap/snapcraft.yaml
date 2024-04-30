@@ -92,6 +92,7 @@ apps:
       - mount-observe
       - block-devices
       - microstack-support
+      - system-observe
     # Make sure KillMode=process is set in the resulting systemd unit instead of
     # the default KillMode=control-group to avoid the situation where stopping
     # libvirtd causes the forced power off scenario for all VMs; it also affects
