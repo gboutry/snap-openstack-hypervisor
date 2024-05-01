@@ -70,6 +70,10 @@ for cpu models.
 
 IP address to use for configuration of SPICE consoles in instances.
 
+* `compute.resume-on-boot` (true) Resume instances on boot
+
+Whether to resume instances on boot or not.
+
 ### identity
 
 Configuration of options related to identity (Keystone):

@@ -253,6 +253,7 @@ DEFAULT_CONFIG = {
     "compute.cert": UNSET,
     "compute.key": UNSET,
     "compute.migration-address": UNSET,
+    "compute.resume-on-boot": True,
     # Neutron
     "network.physnet-name": "physnet1",
     "network.external-bridge": "br-ex",
