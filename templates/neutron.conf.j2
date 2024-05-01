@@ -15,10 +15,6 @@ debug = {{ logging.debug }}
 transport_url = {{ rabbitmq.url }}
 {% endif %}
 
-{% if network.dns_domain %}
-dns_domain = {{ network.dns_domain }}
-{% endif %}
-
 notify_nova_on_port_status_changes = True
 notify_nova_on_port_data_changes = True
 
