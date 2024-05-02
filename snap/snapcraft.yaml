@@ -283,12 +283,6 @@ apps:
     command: 'bin/ovs-exporter-service'
     plugs:
       - network-bind
-      - openvswitch
-      - log-observe
-      - system-observe
-      - network-observe
-      - netlink-audit
-      - kernel-module-observe
     daemon: simple
     install-mode: disable
 
