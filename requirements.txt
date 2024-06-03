@@ -5,10 +5,8 @@ git+https://github.com/albertodonato/snap-helpers#egg=snap-helpers
 jinja2
 
 fastapi
-gunicorn
 netifaces
 pydantic
-uvicorn[standard]
 
 # matched to 22.04 version with patches from 0.6.6
 pyroute2==0.6.6
