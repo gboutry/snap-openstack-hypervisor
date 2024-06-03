@@ -114,7 +114,7 @@ and OVN:
 
 * `network.ip-address` (`node.ip-address`) IP address to use for overlay network endpoints
 * `network.ovn-sb-connection` (`tcp:127.0.0.1:6642`) OVN Southbound DB connection URL
-* `network.enable-gateway` (False) Enable OVS/OVS as north/south gateway
+* `network.enable-gateway` (False) Obsolete - gateway status determined from configuration
 
 TLS configuration for OVN can also be supplied via snap configuration:
 

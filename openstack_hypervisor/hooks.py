@@ -795,41 +795,49 @@ def _configure_ovn_external_networking(snap: Snap) -> None:
         if external_nic:
             logging.info(f"Adding {external_nic} to {external_bridge}")
             _ensure_single_nic_on_bridge(external_bridge, external_nic)
+            _enable_chassis_as_gateway()
         else:
             logging.info(f"Removing nics from {external_bridge}")
             _del_external_nics_from_bridge(external_bridge)
+            _disable_chassis_as_gateway()
     else:
         logging.info(f"configuring external bridge {external_bridge}")
         _add_ip_to_interface(external_bridge, external_bridge_address)
         external_network = ipaddress.ip_interface(external_bridge_address).network
         _add_iptable_postrouting_rule(str(external_network), comment)
+        _enable_chassis_as_gateway()
 
-    if snap.config.get("network.enable-gateway"):
-        logging.info("Enabling OVS as external gateway")
-        subprocess.check_call(
-            [
-                "ovs-vsctl",
-                "--retry",
-                "set",
-                "open",
-                ".",
-                "external_ids:ovn-cms-options=enable-chassis-as-gw",
-            ]
-        )
-    else:
-        logging.info("Disabling OVS as external gateway")
-        subprocess.check_call(
-            [
-                "ovs-vsctl",
-                "--retry",
-                "remove",
-                "open",
-                ".",
-                "external_ids",
-                "ovn-cms-options",
-                "enable-chassis-as-gw",
-            ]
-        )
+
+def _enable_chassis_as_gateway():
+    """Enable OVS as an external chassis gateway."""
+    logging.info("Enabling OVS as external gateway")
+    subprocess.check_call(
+        [
+            "ovs-vsctl",
+            "--retry",
+            "set",
+            "open",
+            ".",
+            "external_ids:ovn-cms-options=enable-chassis-as-gw",
+        ]
+    )
+
+
+def _disable_chassis_as_gateway():
+    """Enable OVS as an external chassis gateway."""
+    logging.info("Disabling OVS as external gateway")
+    subprocess.check_call(
+        [
+            "ovs-vsctl",
+            "--retry",
+            "remove",
+            "open",
+            ".",
+            "external_ids",
+            "ovn-cms-options",
+            "enable-chassis-as-gw",
+        ]
+    )
 
 
 def _parse_tls(snap: Snap, config_key: str) -> bytes:
