@@ -795,6 +795,7 @@ def _configure_ovn_external_networking(snap: Snap) -> None:
         if external_nic:
             logging.info(f"Adding {external_nic} to {external_bridge}")
             _ensure_single_nic_on_bridge(external_bridge, external_nic)
+            _ensure_link_up(external_nic)
             _enable_chassis_as_gateway()
         else:
             logging.info(f"Removing nics from {external_bridge}")
@@ -838,6 +839,17 @@ def _disable_chassis_as_gateway():
             "enable-chassis-as-gw",
         ]
     )
+
+
+def _ensure_link_up(interface: str):
+    """Ensure link status is up for an interface.
+
+    :param: interface: network interface to set link up
+    :type interface: str
+    """
+    ipr = IPRoute()
+    dev = ipr.link_lookup(ifname=interface)[0]
+    ipr.link("set", index=dev, state="up")
 
 
 def _parse_tls(snap: Snap, config_key: str) -> bytes:
