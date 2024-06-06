@@ -8,5 +8,5 @@ fastapi
 netifaces
 pydantic
 
-# matched to 22.04 version with patches from 0.6.6
-pyroute2==0.6.6
+# matched to caracal cloud-archive
+pyroute2==0.7.11
