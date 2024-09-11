@@ -428,6 +428,7 @@ parts:
       - --disable-bsd-user
       - --disable-vhost-user
       - --disable-xen
+      - --disable-werror
       - --prefix=/usr
       - --localstatedir=/var/snap/$CRAFT_PROJECT_NAME/common
       - --sysconfdir=/var/snap/$CRAFT_PROJECT_NAME/common
