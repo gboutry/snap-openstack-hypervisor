@@ -32,6 +32,7 @@ environment:
 architectures:
   - build-on: amd64
   - build-on: arm64
+  - build-on: s390x
 
 system-usernames:
   snap_daemon: shared
