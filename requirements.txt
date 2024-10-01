@@ -8,5 +8,7 @@ fastapi
 netifaces
 pydantic
 
+cryptography==41.0.7
+
 # matched to caracal cloud-archive
 pyroute2==0.7.11

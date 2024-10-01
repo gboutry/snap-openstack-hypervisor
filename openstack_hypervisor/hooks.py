@@ -14,6 +14,7 @@
 
 import base64
 import binascii
+import datetime
 import errno
 import hashlib
 import ipaddress
@@ -26,9 +27,15 @@ import socket
 import stat
 import string
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from cryptography import x509
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from jinja2 import Environment, FileSystemLoader, Template
 from netifaces import AF_INET, gateways, ifaddresses
 from pyroute2 import IPRoute
@@ -75,6 +82,7 @@ COMMON_DIRS = [
     Path("etc/pki/CA"),
     Path("etc/pki/libvirt"),
     Path("etc/pki/libvirt/private"),
+    Path("etc/pki/local"),
     Path("etc/pki/qemu"),
     # log
     Path("log/libvirt/qemu"),
@@ -315,6 +323,7 @@ def install(snap: Snap) -> None:
     logging.info("Running install hook")
     _mkdirs(snap)
     _update_default_config(snap)
+    _configure_libvirt_tls(snap)
 
 
 def _get_template(snap: Snap, template: str) -> Template:
@@ -852,19 +861,19 @@ def _ensure_link_up(interface: str):
     ipr.link("set", index=dev, state="up")
 
 
-def _parse_tls(snap: Snap, config_key: str) -> bytes:
+def _parse_tls(snap: Snap, config_key: str) -> bytes | None:
     """Parse Base64 encoded key or cert.
 
     :param config_key: base64 encoded data (or UNSET)
     :type config_key: str
     :return: decoded data or None
-    :rtype: bytes
+    :rtype: bytes | None
     """
     try:
         return base64.b64decode(snap.config.get(config_key))
     except (binascii.Error, TypeError):
         logging.warning(f"Parsing failed for {config_key}")
-        pass
+    return None
 
 
 def _configure_tls(snap: Snap) -> None:
@@ -899,19 +908,193 @@ def _configure_cabundle_tls(snap: Snap) -> None:
         cacert_path.unlink(missing_ok=True)
 
 
+def _certificate_is_still_valid(cert: x509.Certificate) -> bool:
+    """Check if certificate is still valid."""
+    today = datetime.datetime.today()
+    return cert.not_valid_before < today < cert.not_valid_after
+
+
+def _generate_local_ca(root_path: Path) -> tuple[x509.Certificate, rsa.RSAPrivateKey, bool]:
+    """Return local CA cert and if it was generated."""
+    ca_private_key = root_path / Path("ca.key")
+    ca_certificate = root_path / Path("ca.pem")
+    if ca_certificate.exists() and ca_private_key.exists():
+        certificate = x509.load_pem_x509_certificate(ca_certificate.read_bytes())
+        private_key = load_pem_private_key(ca_private_key.read_bytes(), password=None)
+        if not isinstance(private_key, rsa.RSAPrivateKey):
+            raise ValueError("Invalid private key, should be RSA.")
+        if _certificate_is_still_valid(certificate):
+            return (
+                certificate,
+                private_key,
+                False,
+            )
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )
+    public_key = private_key.public_key()
+    builder = x509.CertificateBuilder()
+    cn = socket.getfqdn()
+    builder = builder.subject_name(
+        x509.Name(
+            [
+                x509.NameAttribute(x509.NameOID.COMMON_NAME, cn),
+                x509.NameAttribute(x509.NameOID.ORGANIZATION_NAME, "openstack-hypervisor"),
+                x509.NameAttribute(
+                    x509.NameOID.ORGANIZATIONAL_UNIT_NAME, "local openstack-hypervisor"
+                ),
+            ]
+        )
+    )
+    builder = builder.issuer_name(
+        x509.Name(
+            [
+                x509.NameAttribute(x509.NameOID.COMMON_NAME, cn),
+            ]
+        )
+    )
+    today = datetime.datetime.today()
+    builder = builder.not_valid_before(today - datetime.timedelta(days=1))
+    builder = builder.not_valid_after(today + datetime.timedelta(days=365))
+    builder = builder.serial_number(int(uuid.uuid4()))
+    builder = builder.public_key(public_key)
+    builder = builder.add_extension(
+        x509.BasicConstraints(ca=True, path_length=None),
+        critical=True,
+    )
+    certificate = builder.sign(
+        private_key=private_key,
+        algorithm=hashes.SHA256(),
+    )
+    ca_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    ca_crt_pem = certificate.public_bytes(
+        encoding=serialization.Encoding.PEM,
+    )
+    for path, pem in (
+        (ca_private_key, ca_key_pem),
+        (ca_certificate, ca_crt_pem),
+    ):
+        path.unlink(missing_ok=True)
+        path.touch(0o660)
+        path.write_bytes(pem)
+    return certificate, private_key, True
+
+
+def _generate_local_servercert(
+    root_path: Path,
+    ca_cert: x509.Certificate,
+    ca_private_key: rsa.RSAPrivateKey,
+    force: bool = False,
+) -> tuple[x509.Certificate, rsa.RSAPrivateKey]:
+    server_crt = root_path / Path("server.crt")
+    server_key = root_path / Path("server.key")
+    if not force or server_crt.exists() and server_key.exists():
+        server_crt_loaded = x509.load_pem_x509_certificate(server_crt.read_bytes())
+        server_key_loaded = load_pem_private_key(server_key.read_bytes(), password=None)
+        if not isinstance(server_key_loaded, rsa.RSAPrivateKey):
+            raise ValueError("Invalid private key, should be RSA.")
+        ca_public_key = ca_cert.public_key()
+        if not isinstance(ca_public_key, rsa.RSAPublicKey):
+            raise ValueError("Invalid public key, should be RSA.")
+        try:
+            ca_public_key.verify(
+                server_crt_loaded.signature,
+                server_crt_loaded.tbs_certificate_bytes,
+                padding.PKCS1v15(),
+                hashes.SHA256(),
+            )
+            if _certificate_is_still_valid(server_crt_loaded):
+                return server_crt_loaded, server_key_loaded
+        except InvalidSignature:
+            logging.warning("Server certificate does not match CA certificate, re-generate.")
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )
+    public_key = private_key.public_key()
+    builder = x509.CertificateBuilder()
+    cn = socket.getfqdn()
+    builder = builder.subject_name(
+        x509.Name(
+            [
+                x509.NameAttribute(x509.NameOID.COMMON_NAME, cn),
+                x509.NameAttribute(x509.NameOID.ORGANIZATION_NAME, "openstack-hypervisor"),
+                x509.NameAttribute(
+                    x509.NameOID.ORGANIZATIONAL_UNIT_NAME, "local openstack-hypervisor"
+                ),
+            ]
+        )
+    )
+
+    today = datetime.datetime.today()
+    builder = builder.issuer_name(ca_cert.subject)
+    builder = builder.not_valid_before(today - datetime.timedelta(days=1))
+    builder = builder.not_valid_after(today + datetime.timedelta(days=365))
+    builder = builder.serial_number(int(uuid.uuid4()))
+    builder = builder.public_key(public_key)
+    certificate = builder.sign(
+        private_key=ca_private_key,
+        algorithm=hashes.SHA256(),
+    )
+    server_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    server_crt_pem = certificate.public_bytes(
+        encoding=serialization.Encoding.PEM,
+    )
+    for path, pem in (
+        (server_key, server_key_pem),
+        (server_crt, server_crt_pem),
+    ):
+        path.unlink(missing_ok=True)
+        path.touch(0o660)
+        path.write_bytes(pem)
+    return certificate, private_key
+
+
+def _generate_local_tls(snap: Snap) -> tuple[bytes, bytes, bytes]:
+    """This method is used to configure the local TLS for the snap.
+
+    This happens at installation time when there's no TLS configured yet.
+    """
+    root_path = snap.paths.common / Path("etc/pki/local")
+    ca_cert, ca_private_key, ca_generated = _generate_local_ca(root_path)
+    server_cert, server_key = _generate_local_servercert(
+        root_path, ca_cert, ca_private_key, ca_generated
+    )
+
+    return (
+        ca_cert.public_bytes(encoding=serialization.Encoding.PEM),
+        server_cert.public_bytes(encoding=serialization.Encoding.PEM),
+        server_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        ),
+    )
+
+
 def _configure_libvirt_tls(snap: Snap) -> None:
     """Configure Libvirt / QEMU TLS."""
+    cacert = cert = key = None
     try:
         cacert = _parse_tls(snap, "compute.cacert")
         cert = _parse_tls(snap, "compute.cert")
         key = _parse_tls(snap, "compute.key")
     except UnknownConfigKey:
-        logging.info("Libvirt / QEMU TLS configuration incomplete, skipping.")
-        return
+        logging.info("Libvirt / QEMU TLS configuration incomplete, keys missing.")
 
-    if not all((cacert, cert, key)):
-        logging.info("Libvirt / QEMU TLS configuration incomplete, skipping.")
-        return
+    # Default can be "", therefore check for falsy and None
+    if not cacert or not cert or not key:
+        logging.info("Libvirt / QEMU TLS configuration incomplete, generating local.")
+        cacert, cert, key = _generate_local_tls(snap)
 
     pki_cacert = snap.paths.common / Path("etc/pki/CA/cacert.pem")
     # Libvirt TLS configuration

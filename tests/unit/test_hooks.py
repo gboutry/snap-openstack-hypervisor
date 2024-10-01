@@ -24,7 +24,7 @@ from openstack_hypervisor import hooks
 class TestHooks:
     """Contains tests for openstack_hypervisor.hooks."""
 
-    def test_install_hook(self, snap, os_makedirs):
+    def test_install_hook(self, snap):
         """Tests the install hook."""
         hooks.install(snap)
 
@@ -109,7 +109,7 @@ class TestHooks:
         mock_fs_loader.assert_called_once_with(searchpath=str(snap.paths.snap / "templates"))
 
     def test_configure_hook(
-        self, mocker, snap, os_makedirs, check_call, link_lookup, split, addr, link, ip_interface
+        self, mocker, snap, check_call, link_lookup, split, addr, link, ip_interface
     ):
         """Tests the configure hook."""
         mock_template = mocker.Mock()
