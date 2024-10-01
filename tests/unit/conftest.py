@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,22 +26,22 @@ sys.modules["libvirt"] = libvirt_mock
 
 
 @pytest.fixture
-def snap_env():
+def snap_env(tmpdir: Path):
     """Environment variables defined in the snap.
 
     This is primarily used to setup the snaphelpers bit.
     """
     yield {
-        "SNAP": "/snap/mysnap/2",
-        "SNAP_COMMON": "/var/snap/mysnap/common",
-        "SNAP_DATA": "/var/snap/mysnap/2",
+        "SNAP": tmpdir / "snap/mysnap/2",
+        "SNAP_COMMON": tmpdir / "var/snap/mysnap/common",
+        "SNAP_DATA": tmpdir / "var/snap/mysnap/2",
         "SNAP_INSTANCE_NAME": "",
         "SNAP_NAME": "mysnap",
         "SNAP_REVISION": "2",
         "SNAP_USER_COMMON": "",
         "SNAP_USER_DATA": "",
         "SNAP_VERSION": "1.2.3",
-        "SNAP_REAL_HOME": "/home/ubuntu",
+        "SNAP_REAL_HOME": tmpdir / "home/ubuntu",
     }
 
 
