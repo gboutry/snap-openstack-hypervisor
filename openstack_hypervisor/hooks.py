@@ -78,6 +78,7 @@ COMMON_DIRS = [
     Path("etc/ssl/certs"),
     Path("etc/ssl/private"),
     Path("etc/ceilometer"),
+    Path("etc/masakarimonitors"),
     Path("etc/pki"),
     Path("etc/pki/CA"),
     Path("etc/pki/libvirt"),
@@ -122,6 +123,8 @@ MONITORING_SERVICES = [
     "libvirt-exporter",
     "ovs-exporter",
 ]
+
+MASAKARI_SERVICES = ["masakari-instancemonitor"]
 
 
 def _generate_secret(length: int = DEFAULT_SECRET_LENGTH) -> str:
@@ -285,6 +288,8 @@ DEFAULT_CONFIG = {
     "telemetry.publisher-secret": UNSET,
     # TLS
     "ca.bundle": UNSET,
+    # Masakari
+    "masakari.enable": False,
 }
 
 
@@ -306,6 +311,7 @@ REQUIRED_CONFIG = {
         "identity",
         "rabbitmq.url",
     ],
+    "masakari-instancemonitor": ["identity.password", "identity.username", "identity"],
 }
 
 
@@ -393,6 +399,10 @@ TEMPLATES = {
     Path("etc/ceilometer/polling.yaml"): {
         "template": "polling.yaml.j2",
         "services": ["ceilometer-compute-agent"],
+    },
+    Path("etc/masakarimonitors/masakarimonitors.conf"): {
+        "template": "masakarimonitors.conf.j2",
+        "services": ["masakari-instancemonitor"],
     },
 }
 
@@ -1350,6 +1360,25 @@ def _configure_monitoring_services(snap: Snap) -> None:
             services[service].stop(disable=True)
 
 
+def _configure_masakari_services(snap: Snap) -> None:
+    """Configure all the masakari services.
+
+    :param snap: the snap reference
+    :type snap: Snap
+    :return: None
+    """
+    services = snap.services.list()
+    enable_masakari = snap.config.get("masakari.enable")
+    if enable_masakari:
+        logging.info("Enabling all masakari services.")
+        for service in MASAKARI_SERVICES:
+            services[service].start(enable=True)
+    else:
+        logging.info("Disabling all masakari services.")
+        for service in MASAKARI_SERVICES:
+            services[service].stop(disable=True)
+
+
 def services() -> List[str]:
     """List of services managed by hooks."""
     return sorted(list(set([w for v in TEMPLATES.values() for w in v.get("services", [])])))
@@ -1395,6 +1424,9 @@ def _services_not_enabled_by_config(context: dict) -> List[str]:
     if not context.get("telemetry", {}).get("enable"):
         not_enabled.append("ceilometer-compute-agent")
 
+    if not context.get("masakari", {}).get("enable"):
+        not_enabled.append("masakari-instancemonitor")
+
     return not_enabled
 
 
@@ -1427,6 +1459,7 @@ def configure(snap: Snap) -> None:
         "telemetry",
         "monitoring",
         "ca",
+        "masakari",
     ).as_dict()
 
     # Add some general snap path information
@@ -1471,3 +1504,4 @@ def configure(snap: Snap) -> None:
     _configure_kvm(snap)
     _configure_monitoring_services(snap)
     _configure_ceph(snap)
+    _configure_masakari_services(snap)

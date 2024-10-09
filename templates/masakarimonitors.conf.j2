@@ -1,0 +1,28 @@
+# THIS FILE IS MANAGED BY THE SNAP - CHANGES WILL BE OVERWRITTEN
+# Use $SNAP_COMMON/etc/masakarimonitors/masakarimonitors.conf.d for deployment specific
+# configuration
+
+[DEFAULT]
+debug = {{ logging.debug }}
+
+[api]
+api_interface = internal
+
+auth_url = {{ identity.auth_url }}
+auth_type = password
+project_domain_name = {{ identity.project_domain_name }}
+user_domain_name = {{ identity.user_domain_name }}
+project_name = {{ identity.project_name }}
+username = {{ identity.username }}
+password = {{ identity.password }}
+project_domain_id = {{ identity.project_domain_id }}
+user_domain_id = {{ identity.user_domain_id }}
+region = {{ identity.region }}
+{% if ca and ca.bundle -%}
+cafile = {{ snap_common }}/etc/ssl/certs/receive-ca-bundle.pem
+{% endif -%}
+service_token_roles = {{ identity.admin_role }}
+service_token_roles_required = True
+
+[libvirt]
+# connection_uri = qemu:///system
