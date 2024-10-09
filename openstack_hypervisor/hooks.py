@@ -311,7 +311,12 @@ REQUIRED_CONFIG = {
         "identity",
         "rabbitmq.url",
     ],
-    "masakari-instancemonitor": ["identity.password", "identity.username", "identity"],
+    "masakari-instancemonitor": [
+        "identity.password",
+        "identity.username",
+        "identity",
+        "node.fqdn",
+    ],
 }
 
 

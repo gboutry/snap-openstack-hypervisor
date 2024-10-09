@@ -173,6 +173,7 @@ class TestHooks:
         config["identity"] = {"username": "user", "password": "pass"}
         assert hooks._services_not_ready(config) == [
             "ceilometer-compute-agent",
+            "masakari-instancemonitor",
             "neutron-ovn-metadata-agent",
             "nova-api-metadata",
             "nova-compute",
