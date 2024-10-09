@@ -136,6 +136,7 @@ class TestHooks:
         assert hooks.services() == [
             "ceilometer-compute-agent",
             "libvirtd",
+            "masakari-instancemonitor",
             "neutron-ovn-metadata-agent",
             "nova-api-metadata",
             "nova-compute",
@@ -164,6 +165,7 @@ class TestHooks:
         config = {}
         assert hooks._services_not_ready(config) == [
             "ceilometer-compute-agent",
+            "masakari-instancemonitor",
             "neutron-ovn-metadata-agent",
             "nova-api-metadata",
             "nova-compute",
@@ -195,8 +197,10 @@ class TestHooks:
         config = {}
         assert hooks._services_not_enabled_by_config(config) == [
             "ceilometer-compute-agent",
+            "masakari-instancemonitor",
         ]
         config["telemetry"] = {"enable": True}
+        config["masakari"] = {"enable": True}
         assert hooks._services_not_enabled_by_config(config) == []
 
     def test_list_bridge_ifaces(self, check_output):

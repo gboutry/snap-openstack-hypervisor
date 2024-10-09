@@ -127,3 +127,9 @@ class CABundleConfig(BaseModel):
     """Data Model for CA Bundle settings for the hypervisor services."""
 
     bundle: Optional[str] = Field(default=None)
+
+
+class MasakariConfig(BaseModel):
+    """Data model for masakari configuration settings."""
+
+    enable: bool = Field(default=False)

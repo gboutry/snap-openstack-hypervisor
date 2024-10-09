@@ -256,6 +256,16 @@ apps:
       - firewall-control
       - microstack-support
 
+  masakari-instancemonitor:
+    command: 'bin/masakari-instancemonitor-service'
+    after: [libvirtd]
+    daemon: simple
+    plugs:
+      - network
+      - network-bind
+      - firewall-control
+      - microstack-support
+
   libvirt-exporter:
     daemon: simple
     install-mode: disable
@@ -600,6 +610,7 @@ parts:
       - ceilometer-agent-compute
       - python3-nova
       - python3-neutron
+      - python3-masakari-monitors
       - python3-os-vif
       - python3-os-brick
       - python3-distutils

@@ -142,6 +142,21 @@ class CeilometerComputeAgentService(OpenStackService):
 ceilometer_compute_agent = partial(entry_point, CeilometerComputeAgentService)
 
 
+class MasakariInstanceMonitorService(OpenStackService):
+    """A python service object used to run the masakari-instancemonitor daemon."""
+
+    conf_files = [
+        Path("etc/masakarimonitors/masakarimonitors.conf"),
+    ]
+    conf_dirs = []
+    extra_args = []
+
+    executable = Path("usr/bin/masakari-instancemonitor")
+
+
+masakari_instancemonitor = partial(entry_point, MasakariInstanceMonitorService)
+
+
 class OVSDBServerService:
     """A python service object used to run the ovsdb-server daemon."""
 
