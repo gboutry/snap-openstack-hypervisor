@@ -18,7 +18,7 @@ username = {{ identity.username }}
 password = {{ identity.password }}
 project_domain_id = {{ identity.project_domain_id }}
 user_domain_id = {{ identity.user_domain_id }}
-region = {{ identity.region }}
+region = {{ identity.region_name }}
 {% if ca and ca.bundle -%}
 cafile = {{ snap_common }}/etc/ssl/certs/receive-ca-bundle.pem
 {% endif -%}
