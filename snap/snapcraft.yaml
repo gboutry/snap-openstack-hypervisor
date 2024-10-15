@@ -69,6 +69,12 @@ package-repositories:
     url: http://ubuntu-cloud.archive.canonical.com/ubuntu
 
 apps:
+  openstack-hypervisor:
+    command: bin/hypervisor
+    plugs:
+      - network
+      - network-observe
+
   # Libvirt
   libvirtd:
     environment:
