@@ -18,13 +18,30 @@ import pathlib
 from typing import Iterable
 
 import click
+import pydantic
 import pyroute2
 from pyroute2.ndb.objects.interface import Interface
 
 VALUE_FORMAT = "value"
 JSON_FORMAT = "json"
+JSON_INDENT_FORMAT = "json-indent"
 
 logger = logging.getLogger(__name__)
+
+
+class InterfaceOutput(pydantic.BaseModel):
+    """Output schema for an interface."""
+
+    name: str = pydantic.Field(description="Main name of the interface")
+    configured: bool = pydantic.Field(
+        description="Whether the interface has an IP address configured"
+    )
+    up: bool = pydantic.Field(description="Whether the interface is up")
+    connected: bool = pydantic.Field(description="Whether the interface is connected")
+
+
+class NicList(pydantic.RootModel[list[InterfaceOutput]]):
+    """Root schema for a list of interfaces."""
 
 
 def get_interfaces(ndb) -> list[Interface]:
@@ -47,6 +64,16 @@ def is_interface_configured(nic: Interface) -> bool:
             logger.debug("Interface %r has IP address %r", nic["ifname"], ip)
             return True
     return False
+
+
+def is_nic_connected(interface: Interface) -> bool:
+    """Check if nic is physically connected."""
+    return interface["operstate"].lower() == "up"
+
+
+def is_nic_up(interface: Interface) -> bool:
+    """Check if nic is up."""
+    return interface["state"].lower() == "up"
 
 
 def load_virtual_interfaces() -> list[str]:
@@ -92,18 +119,43 @@ def filter_candidate_nics(nics: Iterable[Interface]) -> list[str]:
     return configured_nics
 
 
-def display_nics(nics: list[str], candidate_nics: list[str], format: str):
+def to_output_schema(nics: list[Interface]) -> NicList:
+    """Convert the interfaces to the output schema."""
+    nics_ = []
+    for nic in nics:
+        nics_.append(
+            InterfaceOutput(
+                name=nic["ifname"],
+                configured=is_interface_configured(nic),
+                up=is_nic_up(nic),
+                connected=is_nic_connected(nic),
+            )
+        )
+    return NicList(nics_)
+
+
+def display_nics(nics: NicList, candidate_nics: list[str], format: str):
     """Display the result depending on the format."""
     if format == VALUE_FORMAT:
         print("All nics:")
-        for nic in nics:
-            print(nic)
+        for nic in nics.root:
+            print(
+                nic.name,
+                ",",
+                "configured:",
+                nic.configured,
+                "up:",
+                nic.up,
+                "connected:",
+                nic.connected,
+            )
         if candidate_nics:
             print("Candidate nics:")
-            for nic in candidate_nics:
-                print(nic)
-    elif format == JSON_FORMAT:
-        print(json.dumps({"nics": nics, "candidates": candidate_nics}, indent=2))
+            for candidate in candidate_nics:
+                print(candidate)
+    elif format in (JSON_FORMAT, JSON_INDENT_FORMAT):
+        indent = 2 if format == JSON_INDENT_FORMAT else None
+        print(json.dumps({"nics": nics.model_dump(), "candidates": candidate_nics}, indent=indent))
 
 
 @click.command("list-nics")
@@ -111,7 +163,7 @@ def display_nics(nics: list[str], candidate_nics: list[str], format: str):
     "-f",
     "--format",
     default=JSON_FORMAT,
-    type=click.Choice([VALUE_FORMAT, JSON_FORMAT]),
+    type=click.Choice([VALUE_FORMAT, JSON_FORMAT, JSON_INDENT_FORMAT]),
     help="Output format",
 )
 def list_nics(format: str):
@@ -122,4 +174,5 @@ def list_nics(format: str):
     with pyroute2.NDB() as ndb:
         nics = get_interfaces(ndb)
         candidate_nics = filter_candidate_nics(nics)
-        display_nics([nic["ifname"] for nic in nics], candidate_nics, format)
+        nics_ = to_output_schema(nics)
+    display_nics(nics_, candidate_nics, format)
