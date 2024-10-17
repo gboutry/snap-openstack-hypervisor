@@ -17,12 +17,7 @@ import sys
 
 def setup_root_logging():
     """Sets up the root logging level for the application."""
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger()
-    # By default, we'll enable all debug logging.
-    logger.setLevel(logging.DEBUG)
     verbose = False
-
     for arg in sys.argv:
         if arg.lower() in ["-v", "--verbose"]:
             verbose = True
@@ -32,6 +27,4 @@ def setup_root_logging():
     for namespace in ("pyroute2",):
         logging.getLogger(namespace).setLevel(logging.WARNING)
 
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
-    logger.addHandler(stream_handler)
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO)
