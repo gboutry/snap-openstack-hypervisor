@@ -858,7 +858,7 @@ slots:
     content: consul-unix-sock
     source:
       write:
-        - $SNAP_DATA/data
+        - $SNAP_DATA/hypervisor
 
 hooks:
   install:
