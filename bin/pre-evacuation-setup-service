@@ -12,7 +12,7 @@ import psutil
 from pydantic import BaseModel, Field, field_validator
 from snaphelpers import Snap
 
-SOCKET_PATH = os.path.join(os.environ["SNAP_DATA"], "data", "shutdown.sock")
+SOCKET_PATH = os.path.join(os.environ["SNAP_DATA"], "hypervisor", "shutdown.sock")
 
 PROTOCOL_VERSION = "1.0"
 VIRSH_TIMEOUT = 3
