@@ -5,12 +5,13 @@ Subject: [PATCH] Remove definition of DNSMASQ
 
 Part responsible for building libvirt will define the absolute path to
 DNSMASQ. Remove not to create conflict.
+
 ---
  src/util/virdnsmasq.c | 1 -
  1 file changed, 1 deletion(-)
 
 diff --git a/src/util/virdnsmasq.c b/src/util/virdnsmasq.c
-index 7d6de943c..c782f2ba3 100644
+index 7d6de94..c782f2b 100644
 --- a/src/util/virdnsmasq.c
 +++ b/src/util/virdnsmasq.c
 @@ -43,7 +43,6 @@
@@ -23,3 +24,4 @@ index 7d6de943c..c782f2ba3 100644
  
 -- 
 2.43.0
+
