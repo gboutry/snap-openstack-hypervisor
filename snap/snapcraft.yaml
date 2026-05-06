@@ -644,6 +644,7 @@ parts:
     - -Dlibdir=/snap/$CRAFT_PROJECT_NAME/current/usr/lib
     - -Dincludedir=/snap/$CRAFT_PROJECT_NAME/current/usr/include
     - -Dlocalstatedir=/var/snap/$CRAFT_PROJECT_NAME/common
+    - -Drunstatedir=/var/snap/$CRAFT_PROJECT_NAME/common/run
     - -Dsysconfdir=/var/snap/$CRAFT_PROJECT_NAME/common/etc
     override-build: |
       dpkg-source --before-build $CRAFT_PART_SRC
