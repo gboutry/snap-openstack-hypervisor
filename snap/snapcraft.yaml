@@ -396,16 +396,10 @@ parts:
     source-depth: 1
     plugin: autotools
     stage-packages:
-      - seabios
-      - qemu-system-data
       - ipxe-qemu
-      # UEFI Support, required on arm64
       - on arm64:
-        - qemu-efi-aarch64
-        - qemu-efi-arm
         - libspice-server1
       - on amd64:
-        - ovmf
         - libspice-server1
       - libglut3.12 # provides libglut.so.3
       - libnuma1
@@ -510,6 +504,7 @@ parts:
       - --disable-bsd-user
       - --disable-xen
       - --disable-werror
+      - --python=/usr/bin/python3
       - --prefix=/usr
       - --localstatedir=/var/snap/$CRAFT_PROJECT_NAME/common
       - --sysconfdir=/var/snap/$CRAFT_PROJECT_NAME/common
@@ -525,6 +520,21 @@ parts:
       # execstack is no longer available in Ubuntu 26.04 (removed with prelink).
       # Modern toolchains produce binaries with correct PT_GNU_STACK by default,
       # so clearing executable stack flags manually is no longer necessary.
+
+  # note(gboutry): isolate qemu firmware data to prevent its dependencies to be pulled into the qemu part.
+  qemu-firmware-data:
+    after: [qemu]
+    plugin: nil
+    stage-packages:
+      - qemu-system-data
+      - on amd64:
+        - seabios
+        - ovmf
+      - on arm64:
+        - qemu-efi-aarch64
+    stage:
+      - usr/share
+      - -usr/share/doc
 
   libvirt:
     source: https://git.launchpad.net/ubuntu/+source/libvirt
