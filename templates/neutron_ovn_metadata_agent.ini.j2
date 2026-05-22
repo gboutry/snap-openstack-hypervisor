@@ -2,8 +2,11 @@
 # Use $SNAP_COMMON/etc/neutron/neutron.conf.d for deployment specific
 # configuration
 [DEFAULT]
-nova_metadata_host = {{ node.ip_address }}
+nova_metadata_host = 127.0.0.1
+nova_metadata_port = 8775
+{% if credentials.ovn_metadata_proxy_shared_secret is defined -%}
 metadata_proxy_shared_secret = {{ credentials.ovn_metadata_proxy_shared_secret }}
+{% endif -%}
 debug = {{ logging.debug }}
 
 [ovs]

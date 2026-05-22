@@ -7,7 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openstack_hypervisor.services import FileTransferService
+from openstack_hypervisor.services import (
+    FileTransferService,
+    NovaAPIMetadataService,
+)
 
 _CERT = base64.b64encode(b"CERT").decode()
 _KEY = base64.b64encode(b"KEY").decode()
@@ -132,3 +135,44 @@ class TestFileTransferService:
         assert cmd[sep + 1] == str(tls_config.paths.snap / "usr" / "sbin" / "apache2")
         assert cmd[-1] == "-DFOREGROUND"
         assert "/proc/self/fd/6" in cmd
+
+
+class TestNovaAPIMetadataService:
+    """Tests for NovaAPIMetadataService."""
+
+    @patch("openstack_hypervisor.services.subprocess.run")
+    def test_success_path(
+        self,
+        mock_run,
+        snap,
+    ):
+        """Service should start the local HAProxy metadata bridge."""
+        snap.config.get.return_value = "http://internal/nova-metadata/"
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = NovaAPIMetadataService().run(snap)
+
+        assert result == 0
+        snap.config.get.assert_called_once_with("network.nova-metadata-proxy-url")
+        mock_run.assert_called_once_with(
+            [
+                str(snap.paths.snap / "usr" / "sbin" / "haproxy"),
+                "-f",
+                str(snap.paths.common / "etc" / "haproxy" / "nova_metadata.cfg"),
+                "-db",
+            ]
+        )
+
+    @patch("openstack_hypervisor.services.subprocess.run")
+    def test_returns_1_without_metadata_proxy_url(
+        self,
+        mock_run,
+        snap,
+    ):
+        """Service should fail fast when the metadata ingress URL is missing."""
+        snap.config.get.return_value = "UNSET"
+
+        result = NovaAPIMetadataService().run(snap)
+
+        assert result == 1
+        mock_run.assert_not_called()

@@ -684,7 +684,13 @@ parts:
       git config user.email "snapcraft@build"
       git config user.name "snapcraft"
       git am --abort 2>/dev/null || true
-      git am $CRAFT_PROJECT_DIR/snap/patches/libvirt/*.patch
+      for patch in $CRAFT_PROJECT_DIR/snap/patches/libvirt/*.patch; do
+        if git apply --check "$patch"; then
+          git am "$patch"
+        else
+          echo "Skipping inapplicable libvirt patch: $patch"
+        fi
+      done
       popd || exit 1
 
       craftctl default

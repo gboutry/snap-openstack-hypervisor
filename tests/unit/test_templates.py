@@ -8,6 +8,7 @@ from jinja2 import Environment, FileSystemLoader
 TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates"
 
 BASE_CONTEXT = {
+    "snap": "/snap/openstack-hypervisor/current",
     "snap_common": "/var/snap/openstack-hypervisor/common",
     "logging": {"debug": False},
     "rabbitmq": {"url": "rabbit://guest:guest@mq.internal:5672/openstack"},
@@ -16,6 +17,14 @@ BASE_CONTEXT = {
     "network": {
         "ovs_socket_path": "unix:/var/run/openvswitch/db.sock",
         "dns_servers": "",
+        "nova_metadata_proxy_url": "http://internal/nova-metadata",
+        "nova_metadata_proxy_scheme": "http",
+        "nova_metadata_proxy_host": "internal",
+        "nova_metadata_proxy_server_host": "internal",
+        "nova_metadata_proxy_port": 80,
+        "nova_metadata_proxy_host_header": "internal",
+        "nova_metadata_proxy_path": "/nova-metadata",
+        "nova_metadata_proxy_ssl": False,
     },
     "compute": {
         "resume_on_boot": False,
@@ -54,7 +63,10 @@ BASE_CONTEXT = {
 
 
 def _render(template_name: str, **context_overrides) -> str:
-    env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
+    env = Environment(
+        loader=FileSystemLoader(str(TEMPLATES_DIR)),
+        keep_trailing_newline=True,
+    )
     context = dict(BASE_CONTEXT)
     context.update(context_overrides)
     return env.get_template(template_name).render(context)
@@ -90,6 +102,28 @@ def test_neutron_clients_use_internal_interface():
     )
 
 
+def test_neutron_ovn_metadata_agent_uses_nova_metadata_endpoint():
+    output = _render("neutron_ovn_metadata_agent.ini.j2")
+
+    assert "nova_metadata_host = 127.0.0.1" in output
+    assert "nova_metadata_port = 8775" in output
+    assert "metadata_proxy_shared_secret = secret" in output
+
+
+def test_metadata_templates_render_before_credentials_are_configured():
+    """First snap configure can run before charm-provided credentials exist."""
+    output = _render("nova.conf.j2", credentials={})
+
+    assert "service_metadata_proxy = True" not in output
+    assert "metadata_proxy_shared_secret" not in output
+
+    output = _render("neutron_ovn_metadata_agent.ini.j2", credentials={})
+
+    assert "nova_metadata_host = 127.0.0.1" in output
+    assert "nova_metadata_port = 8775" in output
+    assert "metadata_proxy_shared_secret" not in output
+
+
 def test_ceilometer_service_credentials_use_internal_interface_and_cafile():
     output = _render("ceilometer.conf.j2")
 
@@ -111,3 +145,23 @@ def test_masakarimonitors_keeps_internal_api_and_region():
         "cafile = /var/snap/openstack-hypervisor/common/etc/ssl/certs/receive-ca-bundle.pem"
         in output
     )
+
+
+def test_nova_metadata_is_local_reverse_proxy():
+    output = _render("nova_metadata_haproxy.cfg.j2")
+
+    assert "bind 127.0.0.1:8775" in output
+    assert "http-request set-header Host internal" in output
+    assert "http-request set-path /nova-metadata%[path]" in output
+    assert "http-response del-header Transfer-Encoding" in output
+    assert "http-response set-header Connection close" in output
+    assert "server nova-metadata internal:80" in output
+    assert output.endswith("\n")
+    assert "WSGIScriptAlias" not in output
+
+
+def test_nova_metadata_proxy_preserves_neutron_request_shape():
+    output = _render("nova_metadata_haproxy.cfg.j2")
+
+    assert "http-request set-header X-Forwarded-Proto http" in output
+    assert "mode http" in output

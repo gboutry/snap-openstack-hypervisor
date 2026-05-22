@@ -192,8 +192,10 @@ password = {{ identity.password }}
 {% if ca and ca.bundle -%}
 cafile = {{ snap_common }}/etc/ssl/certs/receive-ca-bundle.pem
 {% endif -%}
+{% if credentials.ovn_metadata_proxy_shared_secret is defined -%}
 service_metadata_proxy = True
 metadata_proxy_shared_secret = {{ credentials.ovn_metadata_proxy_shared_secret }}
+{% endif -%}
 
 [placement]
 auth_url = {{ identity.auth_url }}
