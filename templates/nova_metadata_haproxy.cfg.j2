@@ -1,0 +1,32 @@
+# THIS FILE IS MANAGED BY THE SNAP - CHANGES WILL BE OVERWRITTEN
+# HAProxy configuration for the local Nova metadata bridge.
+global
+    log stdout format raw local0
+    maxconn 4096
+
+defaults
+    log global
+    mode http
+    option httplog
+    option dontlognull
+    option http-server-close
+    retries 3
+    timeout http-request 30s
+    timeout connect 5s
+    timeout client 32s
+    timeout server 32s
+    timeout http-keep-alive 30s
+
+frontend nova_metadata
+    bind 127.0.0.1:8775
+    http-request set-header Host {{ network.nova_metadata_proxy_host_header }}
+    http-request set-header X-Forwarded-Proto http
+{% if network.nova_metadata_proxy_path %}
+    http-request set-path {{ network.nova_metadata_proxy_path }}%[path]
+{% endif %}
+    http-response del-header Transfer-Encoding
+    http-response set-header Connection close
+    default_backend nova_metadata_upstream
+
+backend nova_metadata_upstream
+    server nova-metadata {{ network.nova_metadata_proxy_server_host }}:{{ network.nova_metadata_proxy_port }}{% if network.nova_metadata_proxy_ssl %} ssl verify required ca-file {% if ca and ca.bundle %}{{ snap_common }}/etc/ssl/certs/receive-ca-bundle.pem{% else %}{{ snap }}/etc/ssl/certs/ca-certificates.crt{% endif %}{% endif %}

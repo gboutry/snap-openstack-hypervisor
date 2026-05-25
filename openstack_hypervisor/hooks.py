@@ -27,6 +27,7 @@ import uuid
 import xml.etree.ElementTree
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib import parse
 
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
@@ -68,7 +69,7 @@ UNSET = ""
 # or None for IPvAnyNetwork.
 IPVANYNETWORK_UNSET = "0.0.0.0/0"
 
-SECRETS = ["credentials.ovn-metadata-proxy-shared-secret"]
+SECRETS = []
 
 DEFAULT_SECRET_LENGTH = 32
 TRUE_STRINGS = ("1", "t", "true", "on", "y", "yes")
@@ -102,6 +103,7 @@ COMMON_DIRS = [
     Path("etc/nova/nova.conf.d"),
     Path("etc/neutron"),
     Path("etc/neutron/neutron.conf.d"),
+    Path("etc/haproxy"),
     Path("etc/ssl/certs"),
     Path("etc/ssl/private"),
     Path("etc/ceilometer"),
@@ -381,6 +383,7 @@ DEFAULT_CONFIG = {
     "network.ovn-cert": UNSET,
     "network.ovn-key": UNSET,
     "network.ovn-cacert": UNSET,
+    "network.nova-metadata-proxy-url": UNSET,
     "network.enable-gateway": False,
     "network.ip-address": _get_local_ip_by_default_route,  # noqa: F821
     # Deprecate external nic
@@ -418,11 +421,8 @@ REQUIRED_CONFIG = {
         "rabbitmq.url",
     ],
     "nova-api-metadata": [
-        "identity.password",
-        "identity.username",
-        "identity",
-        "rabbitmq.url",
-        "network",
+        "credentials.ovn_metadata_proxy_shared_secret",
+        "network.nova_metadata_proxy_url",
     ],
     "neutron-ovn-metadata-agent": ["credentials", "network", "node", "network.ovn_key"],
     "ceilometer-compute-agent": [
@@ -472,7 +472,10 @@ def _get_template(snap: Snap, template: str) -> Template:
     :rtype: Template
     """
     template_dir = snap.paths.snap / "templates"
-    env = Environment(loader=FileSystemLoader(searchpath=str(template_dir)))
+    env = Environment(
+        loader=FileSystemLoader(searchpath=str(template_dir)),
+        keep_trailing_newline=True,
+    )
     return env.get_template(template)
 
 
@@ -545,7 +548,11 @@ def _split_dedicated_cores_by_profile(
 TEMPLATES = {
     Path("etc/nova/nova.conf"): {
         "template": "nova.conf.j2",
-        "services": ["nova-compute", "nova-api-metadata"],
+        "services": ["nova-compute"],
+    },
+    Path("etc/haproxy/nova_metadata.cfg"): {
+        "template": "nova_metadata_haproxy.cfg.j2",
+        "services": ["nova-api-metadata"],
     },
     Path("etc/neutron/neutron.conf"): {
         "template": "neutron.conf.j2",
@@ -3125,6 +3132,7 @@ def _get_configure_context(snap: Snap) -> dict:
     context.setdefault("compute", {})
     context.setdefault("network", {})
     context.setdefault("identity", {})
+    context.setdefault("credentials", {})
     context["compute"]["multipath_enabled"] = (
         context["compute"].get("multipath_forced", False) or _is_multipathd_available()
     )
@@ -3172,8 +3180,42 @@ def _get_configure_context(snap: Snap) -> dict:
 
     # Add OVS socket path to network context for template rendering
     context["network"]["ovs_socket_path"] = ovs_switch_socket(snap)
+    _set_nova_metadata_proxy_context(context)
 
     return context
+
+
+def _set_nova_metadata_proxy_context(context: dict) -> None:
+    """Add parsed Nova metadata upstream fields for HAProxy rendering."""
+    network = context.setdefault("network", {})
+    proxy_url = network.get("nova_metadata_proxy_url")
+    if not proxy_url:
+        return
+
+    parsed = parse.urlsplit(proxy_url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError(f"Invalid Nova metadata proxy URL: {proxy_url}")
+    if parsed.username or parsed.password:
+        raise ValueError("Nova metadata proxy URL must not include userinfo")
+
+    host = parsed.hostname
+    server_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    default_port = 443 if parsed.scheme == "https" else 80
+    port = parsed.port or default_port
+    host_header = (
+        f"{server_host}:{parsed.port}"
+        if parsed.port and parsed.port != default_port
+        else server_host
+    )
+    path = parsed.path.rstrip("/")
+
+    network["nova_metadata_proxy_scheme"] = parsed.scheme
+    network["nova_metadata_proxy_host"] = host
+    network["nova_metadata_proxy_server_host"] = server_host
+    network["nova_metadata_proxy_port"] = port
+    network["nova_metadata_proxy_host_header"] = host_header
+    network["nova_metadata_proxy_path"] = path
+    network["nova_metadata_proxy_ssl"] = parsed.scheme == "https"
 
 
 # Services to exclude when using external OVS (ovn-chassis plug connected)

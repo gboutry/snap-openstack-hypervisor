@@ -56,6 +56,48 @@ class TestOwnedPath:
 class TestHooks:
     """Contains tests for openstack_hypervisor.hooks."""
 
+    def test_set_nova_metadata_proxy_context_parses_url(self):
+        """Nova metadata ingress URL is expanded for HAProxy rendering."""
+        context = {"network": {"nova_metadata_proxy_url": "http://internal/nova-metadata"}}
+
+        hooks._set_nova_metadata_proxy_context(context)
+
+        assert context["network"]["nova_metadata_proxy_scheme"] == "http"
+        assert context["network"]["nova_metadata_proxy_host"] == "internal"
+        assert context["network"]["nova_metadata_proxy_server_host"] == "internal"
+        assert context["network"]["nova_metadata_proxy_port"] == 80
+        assert context["network"]["nova_metadata_proxy_host_header"] == "internal"
+        assert context["network"]["nova_metadata_proxy_path"] == "/nova-metadata"
+        assert context["network"]["nova_metadata_proxy_ssl"] is False
+
+    def test_set_nova_metadata_proxy_context_defaults_https_port(self):
+        """HTTPS metadata ingress uses the default HTTPS upstream port."""
+        context = {"network": {"nova_metadata_proxy_url": "https://internal/nova-metadata/"}}
+
+        hooks._set_nova_metadata_proxy_context(context)
+
+        assert context["network"]["nova_metadata_proxy_port"] == 443
+        assert context["network"]["nova_metadata_proxy_path"] == "/nova-metadata"
+        assert context["network"]["nova_metadata_proxy_ssl"] is True
+
+    def test_set_nova_metadata_proxy_context_keeps_non_default_host_port(self):
+        """Host header preserves an explicit non-default upstream port."""
+        context = {"network": {"nova_metadata_proxy_url": "https://internal:8443/nova-metadata/"}}
+
+        hooks._set_nova_metadata_proxy_context(context)
+
+        assert context["network"]["nova_metadata_proxy_host_header"] == "internal:8443"
+        assert context["network"]["nova_metadata_proxy_port"] == 8443
+
+    def test_set_nova_metadata_proxy_context_rejects_userinfo(self):
+        """Nova metadata ingress URLs must not contain userinfo."""
+        context = {
+            "network": {"nova_metadata_proxy_url": "https://user:pass@internal/nova-metadata/"}
+        }
+
+        with pytest.raises(ValueError, match="must not include userinfo"):
+            hooks._set_nova_metadata_proxy_context(context)
+
     def test_install_hook(self, mocker, snap, shutil_chown):
         """Tests the install hook."""
         mocker.patch.object(hooks, "_secure_copy")
@@ -271,7 +313,15 @@ class TestHooks:
             "ovn_key": "key",
             "ovn_cacert": "cacert",
         }
-        assert hooks._services_not_ready(config) == ["neutron-ovn-metadata-agent"]
+        assert hooks._services_not_ready(config) == [
+            "neutron-ovn-metadata-agent",
+            "nova-api-metadata",
+        ]
+        config["network"]["nova_metadata_proxy_url"] = "http://internal/nova-metadata"
+        assert hooks._services_not_ready(config) == [
+            "neutron-ovn-metadata-agent",
+            "nova-api-metadata",
+        ]
         config["credentials"] = {"ovn_metadata_proxy_shared_secret": "secret"}
         assert hooks._services_not_ready(config) == []
 

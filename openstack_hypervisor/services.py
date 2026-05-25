@@ -87,16 +87,27 @@ nova_compute = partial(entry_point, NovaComputeService)
 
 
 class NovaAPIMetadataService(OpenStackService):
-    """A python service object used to run the nova-api-metadata daemon."""
+    """A service object used to run the Nova metadata HAProxy bridge."""
 
-    conf_files = [
-        Path("etc/nova/nova.conf"),
-    ]
-    conf_dirs = [
-        Path("etc/nova/nova.conf.d"),
-    ]
+    def run(self, snap: Snap) -> int:
+        """Runs the local Nova metadata reverse proxy."""
+        setup_logging(snap.paths.common / "nova-api-metadata-service.log")
 
-    executable = Path("usr/bin/nova-api-metadata")
+        upstream_url = snap.config.get("network.nova-metadata-proxy-url")
+        if not upstream_url or upstream_url == "UNSET":
+            logging.error("network.nova-metadata-proxy-url is not configured")
+            return 1
+
+        cmd = [
+            str(snap.paths.snap / "usr" / "sbin" / "haproxy"),
+            "-f",
+            str(snap.paths.common / "etc" / "haproxy" / "nova_metadata.cfg"),
+            "-db",
+        ]
+        completed_process = subprocess.run(cmd)
+
+        logging.info("Exiting with code %s", completed_process.returncode)
+        return completed_process.returncode
 
 
 nova_api_metadata = partial(entry_point, NovaAPIMetadataService)
