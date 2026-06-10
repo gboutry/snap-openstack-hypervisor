@@ -15,6 +15,7 @@ from pathlib import Path
 from snaphelpers import Snap, UnknownConfigKey
 
 from openstack_hypervisor.log import setup_logging
+from openstack_hypervisor.mount_validation import validate_instances_mount
 
 OVSDB_SCHEMA_TIMEOUT = 60
 OVSDB_SCHEMA_CHECK_INTERVAL = 2
@@ -48,6 +49,9 @@ class OpenStackService:
         """
         setup_logging(snap.paths.common / f"{self.executable.name}-{snap.name}.log")
 
+        if not self.preflight(snap):
+            return 1
+
         args = []
         for conf_file in self.conf_files:
             args.extend(
@@ -74,6 +78,13 @@ class OpenStackService:
         logging.info(f"Exiting with code {completed_process.returncode}")
         return completed_process.returncode
 
+    def preflight(self, snap: Snap) -> bool:
+        """Preflight checks before starting the service.
+
+        Return True to proceed with startup. Return False to abort.
+        """
+        return True
+
 
 class NovaComputeService(OpenStackService):
     """A python service object used to run the nova-compute daemon."""
@@ -86,6 +97,11 @@ class NovaComputeService(OpenStackService):
     ]
 
     executable = Path("usr/bin/nova-compute")
+
+    def preflight(self, snap: Snap) -> bool:
+        """Validate any configured mount for the Nova instances path."""
+        instances_path = snap.paths.common / "lib" / "nova" / "instances"
+        return validate_instances_mount(instances_path)
 
 
 nova_compute = partial(entry_point, NovaComputeService)
