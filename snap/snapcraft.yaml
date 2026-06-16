@@ -1,14 +1,13 @@
 name: openstack-hypervisor
 version: '2026.1'
 base: core26
-build-base: devel
 summary: OpenStack Hypervisor
 description: |
   The OpenStack Hypervisor snap provides the requires components
   to operate a cloud hypervisor as part of an OpenStack deployment.
 assumes:
 - snapd2.73
-grade: devel
+grade: stable
 confinement: strict
 environment:
   LC_ALL: C
