@@ -830,6 +830,11 @@ parts:
       - rustc
     stage-packages:
       - python3-venv
+      # Python headers (Python.h) must live in the staged Python tree, because
+      # uv builds the venv from this part's staged interpreter. Needed to build
+      # deps from sdist on architectures without published wheels (e.g. s390x):
+      # cryptography, markupsafe, msgpack, psutil.
+      - libpython3-dev
     after:
       - openstack
       - apache2-webdav
