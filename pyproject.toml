@@ -9,6 +9,13 @@ requires = [
 ]
 build-backend = "setuptools.build_meta"
 
+[tool.uv.extra-build-dependencies]
+# On architectures without published wheels (notably s390x), cryptography
+# 41.0.7 is built from sdist. Its setuptools-rust build backend imports
+# pkg_resources, which setuptools >= 81 removed, so constrain the build-time
+# setuptools for this package to a release that still ships pkg_resources.
+cryptography = ["setuptools<81"]
+
 [project]
 name = "openstack-hypervisor"
 version = "2026.1"
