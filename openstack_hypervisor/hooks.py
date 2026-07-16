@@ -414,6 +414,11 @@ DEFAULT_CONFIG = {
 # Required config can be a section like "identity" in which case all keys must
 # be set or a single key like "identity.password".
 REQUIRED_CONFIG = {
+    "file-transfer": [
+        "compute.cacert",
+        "compute.cert",
+        "compute.key",
+    ],
     "nova-compute": [
         "identity.password",
         "identity.username",
@@ -649,11 +654,28 @@ class RestartOnChange(object):
                         restart_services.extend(self.files[file].get("services", []))
 
         restart_services = set([s for s in restart_services if s not in self.exclude_services])
+        if not restart_services:
+            return
+
         services = self.snap.services.list()
         for service in restart_services:
             logging.info(f"Restarting {service}")
             services[service].stop()
             services[service].start(enable=True)
+
+
+def _ensure_service_started(service: Any) -> None:
+    """Start and enable a service unless it has already converged."""
+    if service.enabled and service.active:
+        return
+    service.start(enable=True)
+
+
+def _ensure_service_stopped(service: Any) -> None:
+    """Stop and disable a service unless it has already converged."""
+    if not service.enabled and not service.active:
+        return
+    service.stop(disable=True)
 
 
 def _update_default_config(snap: Snap) -> None:
@@ -2608,11 +2630,11 @@ def _configure_monitoring_services(snap: Snap) -> None:
         for service in MONITORING_SERVICES:
             if ovs_external and service in EXTERNAL_OVS_SERVICES:
                 continue
-            services[service].start(enable=True)
+            _ensure_service_started(services[service])
     else:
         logging.info("Disabling all exporter services.")
         for service in MONITORING_SERVICES:
-            services[service].stop(disable=True)
+            _ensure_service_stopped(services[service])
 
 
 def _configure_masakari_services(snap: Snap) -> None:
@@ -2627,16 +2649,17 @@ def _configure_masakari_services(snap: Snap) -> None:
     if enable_masakari:
         logging.info("Enabling all masakari services.")
         for service in MASAKARI_SERVICES:
-            services[service].start(enable=True)
+            _ensure_service_started(services[service])
     else:
         logging.info("Disabling all masakari services.")
         for service in MASAKARI_SERVICES:
-            services[service].stop(disable=True)
+            _ensure_service_stopped(services[service])
 
 
 def services() -> List[str]:
     """List of services managed by hooks."""
-    return sorted(list(set([w for v in TEMPLATES.values() for w in v.get("services", [])])))
+    templates = {**TEMPLATES, **TLS_TEMPLATES}
+    return sorted(set(w for v in templates.values() for w in v.get("services", [])))
 
 
 def _section_complete(section: str, context: dict) -> bool:
@@ -2835,10 +2858,10 @@ def _configure_sriov_agent_service(snap: Snap, enabled: bool) -> None:
     sriov_service = snap.services.list()["neutron-sriov-nic-agent"]
     if enabled:
         logging.info("SR-IOV mappings detected, enabling SR-IOV agent.")
-        sriov_service.start(enable=True)
+        _ensure_service_started(sriov_service)
     else:
         logging.info("No SR-IOV mappings detected, disabling SR-IOV agent.")
-        sriov_service.stop(disable=True)
+        _ensure_service_stopped(sriov_service)
 
 
 def _set_config_context(context, group, key, val):
@@ -3039,7 +3062,7 @@ def configure(snap: Snap) -> None:
     external_ovs_deferred = ovs_external and not _external_ovs_ready(snap)
     ovs_deferred = internal_ovs_deferred or external_ovs_deferred
     for service in exclude_services:
-        services[service].stop(disable=True)
+        _ensure_service_stopped(services[service])
 
     with RestartOnChange(snap, {**TEMPLATES, **TLS_TEMPLATES}, exclude_services):
         _render_templates(snap, context)
@@ -3249,7 +3272,7 @@ def _ensure_internal_ovs_services(snap: Snap, exclude_services: list[str]) -> No
         if service in MONITORING_SERVICES and not enable_monitoring:
             continue
         logging.info("Ensuring internal OVS service is enabled: %s", service)
-        services[service].start(enable=True)
+        _ensure_service_started(services[service])
 
 
 def _ensure_internal_ovs_dependent_services(snap: Snap, exclude_services: list[str]) -> None:
@@ -3260,7 +3283,7 @@ def _ensure_internal_ovs_dependent_services(snap: Snap, exclude_services: list[s
         if service in exclude_services:
             continue
         logging.info("Ensuring internal OVS-dependent service is enabled: %s", service)
-        services[service].start(enable=True)
+        _ensure_service_started(services[service])
 
 
 def _get_exclude_services(context: dict) -> list[str]:

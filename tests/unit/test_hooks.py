@@ -19,6 +19,14 @@ from openstack_hypervisor.cli import pci_devices
 from openstack_hypervisor.hooks import OwnedPath
 
 
+def service_mock(*, enabled: bool, active: bool):
+    """Return a service mock with an explicit snapd state."""
+    service = mock.Mock()
+    service.enabled = enabled
+    service.active = active
+    return service
+
+
 class TestOwnedPath:
     """Tests for the OwnedPath class."""
 
@@ -243,6 +251,8 @@ class TestHooks:
     def test_configure_hook_exception(self, mocker, snap, os_makedirs, check_call, shutil_chown):
         """Tests the configure hook raising an exception while writing file."""
         mock_template = mocker.Mock()
+        mocker.patch.object(hooks, "_is_multipathd_available", return_value=False)
+        mocker.patch.object(hooks, "_ensure_services_stopped")
         mocker.patch.object(hooks, "_get_template", return_value=mock_template)
         mocker.patch.object(hooks.Path, "write_text")
         mocker.patch.object(hooks.Path, "chmod")
@@ -257,6 +267,7 @@ class TestHooks:
         """Test getting a list of managed services."""
         assert hooks.services() == [
             "ceilometer-compute-agent",
+            "file-transfer",
             "libvirtd",
             "masakari-instancemonitor",
             "neutron-ovn-metadata-agent",
@@ -288,6 +299,7 @@ class TestHooks:
         config = {}
         assert hooks._services_not_ready(config) == [
             "ceilometer-compute-agent",
+            "file-transfer",
             "masakari-instancemonitor",
             "neutron-ovn-metadata-agent",
             "nova-api-metadata",
@@ -296,6 +308,7 @@ class TestHooks:
         config["identity"] = {"username": "user", "password": "pass"}
         assert hooks._services_not_ready(config) == [
             "ceilometer-compute-agent",
+            "file-transfer",
             "masakari-instancemonitor",
             "neutron-ovn-metadata-agent",
             "nova-api-metadata",
@@ -304,6 +317,7 @@ class TestHooks:
         config["rabbitmq"] = {"url": "rabbit://localhost:5672"}
         config["node"] = {"fqdn": "myhost.maas"}
         assert hooks._services_not_ready(config) == [
+            "file-transfer",
             "neutron-ovn-metadata-agent",
             "nova-api-metadata",
         ]
@@ -314,15 +328,23 @@ class TestHooks:
             "ovn_cacert": "cacert",
         }
         assert hooks._services_not_ready(config) == [
+            "file-transfer",
             "neutron-ovn-metadata-agent",
             "nova-api-metadata",
         ]
         config["network"]["nova_metadata_proxy_url"] = "http://internal/nova-metadata"
         assert hooks._services_not_ready(config) == [
+            "file-transfer",
             "neutron-ovn-metadata-agent",
             "nova-api-metadata",
         ]
         config["credentials"] = {"ovn_metadata_proxy_shared_secret": "secret"}
+        assert hooks._services_not_ready(config) == ["file-transfer"]
+        config["compute"] = {
+            "cacert": "cacert",
+            "cert": "cert",
+            "key": "key",
+        }
         assert hooks._services_not_ready(config) == []
 
     def test_services_not_enabled_by_config(self, snap):
@@ -1457,7 +1479,9 @@ class TestEnsureInternalOVSServices:
     """Tests for _ensure_internal_ovs_services function."""
 
     def test_starts_non_excluded_services(self, snap):
-        services = {name: mock.Mock() for name in hooks.EXTERNAL_OVS_SERVICES}
+        services = {
+            name: service_mock(enabled=False, active=False) for name in hooks.EXTERNAL_OVS_SERVICES
+        }
         snap.services.list.return_value = services
         snap.config.get.return_value = True  # monitoring.enable = True
 
@@ -1469,7 +1493,9 @@ class TestEnsureInternalOVSServices:
         services["ovs-exporter"].start.assert_called_once_with(enable=True)
 
     def test_does_not_enable_ovs_exporter_when_monitoring_disabled(self, snap):
-        services = {name: mock.Mock() for name in hooks.EXTERNAL_OVS_SERVICES}
+        services = {
+            name: service_mock(enabled=False, active=False) for name in hooks.EXTERNAL_OVS_SERVICES
+        }
         snap.services.list.return_value = services
         snap.config.get.return_value = False  # monitoring.enable = False
 
@@ -1485,7 +1511,7 @@ class TestEnsureInternalOVSDependentServices:
     """Tests for _ensure_internal_ovs_dependent_services function."""
 
     def test_starts_non_excluded_services(self, snap):
-        services = {"neutron-ovn-metadata-agent": mock.Mock()}
+        services = {"neutron-ovn-metadata-agent": service_mock(enabled=False, active=False)}
         snap.services.list.return_value = services
         helper = getattr(hooks, "_ensure_internal_ovs_dependent_services", None)
 
@@ -1495,7 +1521,7 @@ class TestEnsureInternalOVSDependentServices:
         services["neutron-ovn-metadata-agent"].start.assert_called_once_with(enable=True)
 
     def test_skips_excluded_services(self, snap):
-        services = {"neutron-ovn-metadata-agent": mock.Mock()}
+        services = {"neutron-ovn-metadata-agent": service_mock(enabled=False, active=False)}
         snap.services.list.return_value = services
         helper = getattr(hooks, "_ensure_internal_ovs_dependent_services", None)
 
@@ -1537,7 +1563,9 @@ class TestConfigureMonitoringServices:
     def test_external_ovs_monitoring_enabled_skips_ovs_exporter(self, mocker, snap):
         """ovs-exporter is not started when OVS is external."""
         mocker.patch.object(hooks, "is_ovs_external", return_value=True)
-        services = {name: mock.Mock() for name in hooks.MONITORING_SERVICES}
+        services = {
+            name: service_mock(enabled=False, active=False) for name in hooks.MONITORING_SERVICES
+        }
         snap.services.list.return_value = services
         snap.config.get.return_value = True  # monitoring.enable = True
 
@@ -1549,7 +1577,9 @@ class TestConfigureMonitoringServices:
     def test_internal_ovs_monitoring_enabled_starts_all(self, mocker, snap):
         """Test that all exporters are started when OVS is internal and monitoring enabled."""
         mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        services = {name: mock.Mock() for name in hooks.MONITORING_SERVICES}
+        services = {
+            name: service_mock(enabled=False, active=False) for name in hooks.MONITORING_SERVICES
+        }
         snap.services.list.return_value = services
         snap.config.get.return_value = True  # monitoring.enable = True
 
@@ -1561,7 +1591,9 @@ class TestConfigureMonitoringServices:
     def test_monitoring_disabled_stops_all(self, mocker, snap):
         """Test that all exporters are stopped when monitoring is disabled."""
         mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        services = {name: mock.Mock() for name in hooks.MONITORING_SERVICES}
+        services = {
+            name: service_mock(enabled=True, active=True) for name in hooks.MONITORING_SERVICES
+        }
         snap.services.list.return_value = services
         snap.config.get.return_value = False  # monitoring.enable = False
 
@@ -1569,6 +1601,99 @@ class TestConfigureMonitoringServices:
 
         services["libvirt-exporter"].stop.assert_called_once_with(disable=True)
         services["ovs-exporter"].stop.assert_called_once_with(disable=True)
+
+
+class TestServiceReconciliation:
+    """Tests for state-aware individual service reconciliation."""
+
+    @pytest.mark.parametrize(
+        "enabled,active,should_start",
+        [
+            (False, False, True),
+            (False, True, True),
+            (True, False, True),
+            (True, True, False),
+        ],
+    )
+    def test_ensure_service_started(self, enabled, active, should_start):
+        service = service_mock(enabled=enabled, active=active)
+
+        hooks._ensure_service_started(service)
+
+        if should_start:
+            service.start.assert_called_once_with(enable=True)
+        else:
+            service.start.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "enabled,active,should_stop",
+        [
+            (False, False, False),
+            (False, True, True),
+            (True, False, True),
+            (True, True, True),
+        ],
+    )
+    def test_ensure_service_stopped(self, enabled, active, should_stop):
+        service = service_mock(enabled=enabled, active=active)
+
+        hooks._ensure_service_stopped(service)
+
+        if should_stop:
+            service.stop.assert_called_once_with(disable=True)
+        else:
+            service.stop.assert_not_called()
+
+    def test_masakari_reconciles_enabled_services(self, snap):
+        services = {
+            name: service_mock(enabled=False, active=False) for name in hooks.MASAKARI_SERVICES
+        }
+        snap.services.list.return_value = services
+        snap.config.get.return_value = True
+
+        hooks._configure_masakari_services(snap)
+
+        for service in services.values():
+            service.start.assert_called_once_with(enable=True)
+
+    @pytest.mark.parametrize("enabled", [False, True])
+    def test_sriov_reconciles_service(self, snap, enabled):
+        service = service_mock(enabled=not enabled, active=not enabled)
+        snap.services.list.return_value = {"neutron-sriov-nic-agent": service}
+
+        hooks._configure_sriov_agent_service(snap, enabled)
+
+        if enabled:
+            service.start.assert_called_once_with(enable=True)
+        else:
+            service.stop.assert_called_once_with(disable=True)
+
+
+class TestRestartOnChange:
+    """Tests for change-triggered service restarts."""
+
+    def test_unchanged_files_do_not_list_services(self, snap):
+        config = snap.paths.common / "service.conf"
+        config.parent.mkdir(parents=True)
+        config.write_text("unchanged")
+
+        with hooks.RestartOnChange(snap, {Path("service.conf"): {"services": ["service"]}}):
+            pass
+
+        snap.services.list.assert_not_called()
+
+    def test_changed_file_restarts_service(self, snap):
+        config = snap.paths.common / "service.conf"
+        config.parent.mkdir(parents=True)
+        config.write_text("before")
+        service = mock.Mock()
+        snap.services.list.return_value = {"service": service}
+
+        with hooks.RestartOnChange(snap, {Path("service.conf"): {"services": ["service"]}}):
+            config.write_text("after")
+
+        service.stop.assert_called_once_with()
+        service.start.assert_called_once_with(enable=True)
 
 
 class TestConfigureTLS:
@@ -1645,7 +1770,7 @@ class TestConfigureOVSDeferred:
     def test_internal_ovs_not_ready_defers_ovs_configuration(self, mocker, snap):
         """Internal OVS work is deferred until a later configure hook."""
         order = []
-        services = {"svc1": mock.Mock()}
+        services = {"svc1": service_mock(enabled=True, active=True)}
         snap.services.list.return_value = services
         mocker.patch.object(hooks, "_mkdirs")
         mocker.patch.object(hooks, "_update_default_config")
