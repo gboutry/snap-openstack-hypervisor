@@ -38,7 +38,7 @@ from jinja2 import Environment, FileSystemLoader, Template
 from netifaces import AF_INET, gateways, ifaddresses
 from pyroute2 import IPRoute
 from pyroute2.netlink.exceptions import NetlinkError
-from snaphelpers import Snap
+from snaphelpers import Snap, SnapCtl
 from snaphelpers._conf import UnknownConfigKey
 
 from openstack_hypervisor import netplan, pci
@@ -657,25 +657,53 @@ class RestartOnChange(object):
         if not restart_services:
             return
 
-        services = self.snap.services.list()
-        for service in restart_services:
-            logging.info(f"Restarting {service}")
-            services[service].stop()
-            services[service].start(enable=True)
+        _restart_services(self.snap, restart_services)
 
 
-def _ensure_service_started(service: Any) -> None:
-    """Start and enable a service unless it has already converged."""
-    if service.enabled and service.active:
+def _service_subset(snap: Snap, names: typing.Iterable[str]) -> tuple[list[str], Dict[str, Any]]:
+    """Return sorted unique service names and their current state."""
+    requested = sorted(set(names))
+    if not requested:
+        return requested, {}
+    services = snap.services.list()
+    missing = [name for name in requested if name not in services]
+    if missing:
+        raise RuntimeError(f"Services are not defined by the snap: {', '.join(missing)}")
+    return requested, services
+
+
+# snapd applies service tasks only after the hook exits, so these helpers must
+# not re-read status to verify their queued state transitions.
+def _ensure_services_started(snap: Snap, names: typing.Iterable[str]) -> None:
+    """Queue one start-and-enable operation for non-converged services."""
+    requested, services = _service_subset(snap, names)
+    pending = [
+        name for name in requested if not (services[name].enabled and services[name].active)
+    ]
+    if not pending:
         return
-    service.start(enable=True)
+    SnapCtl(env=snap.environ).start(*pending, enable=True)
 
 
-def _ensure_service_stopped(service: Any) -> None:
-    """Stop and disable a service unless it has already converged."""
-    if not service.enabled and not service.active:
+def _ensure_services_stopped(snap: Snap, names: typing.Iterable[str]) -> None:
+    """Queue one stop-and-disable operation for non-converged services."""
+    requested, services = _service_subset(snap, names)
+    pending = [name for name in requested if services[name].enabled or services[name].active]
+    if not pending:
         return
-    service.stop(disable=True)
+    SnapCtl(env=snap.environ).stop(*pending, disable=True)
+
+
+def _restart_services(snap: Snap, names: typing.Iterable[str]) -> None:
+    """Queue batched stop and start operations for the services."""
+    requested, _ = _service_subset(snap, names)
+    if not requested:
+        return
+    for service in requested:
+        logging.info("Restarting %s", service)
+    snapctl = SnapCtl(env=snap.environ)
+    snapctl.stop(*requested)
+    snapctl.start(*requested, enable=True)
 
 
 def _update_default_config(snap: Snap) -> None:
@@ -2619,7 +2647,6 @@ def _configure_monitoring_services(snap: Snap) -> None:
     :type snap: Snap
     :return: None
     """
-    services = snap.services.list()
     enable_monitoring = snap.config.get("monitoring.enable")
     if enable_monitoring:
         ovs_external = is_ovs_external()
@@ -2627,14 +2654,15 @@ def _configure_monitoring_services(snap: Snap) -> None:
             logging.info("Enabling exporter services (skipping external OVS exporters).")
         else:
             logging.info("Enabling all exporter services.")
-        for service in MONITORING_SERVICES:
-            if ovs_external and service in EXTERNAL_OVS_SERVICES:
-                continue
-            _ensure_service_started(services[service])
+        desired = [
+            service
+            for service in MONITORING_SERVICES
+            if not (ovs_external and service in EXTERNAL_OVS_SERVICES)
+        ]
+        _ensure_services_started(snap, desired)
     else:
         logging.info("Disabling all exporter services.")
-        for service in MONITORING_SERVICES:
-            _ensure_service_stopped(services[service])
+        _ensure_services_stopped(snap, MONITORING_SERVICES)
 
 
 def _configure_masakari_services(snap: Snap) -> None:
@@ -2644,16 +2672,13 @@ def _configure_masakari_services(snap: Snap) -> None:
     :type snap: Snap
     :return: None
     """
-    services = snap.services.list()
     enable_masakari = snap.config.get("masakari.enable")
     if enable_masakari:
         logging.info("Enabling all masakari services.")
-        for service in MASAKARI_SERVICES:
-            _ensure_service_started(services[service])
+        _ensure_services_started(snap, MASAKARI_SERVICES)
     else:
         logging.info("Disabling all masakari services.")
-        for service in MASAKARI_SERVICES:
-            _ensure_service_stopped(services[service])
+        _ensure_services_stopped(snap, MASAKARI_SERVICES)
 
 
 def services() -> List[str]:
@@ -2855,13 +2880,13 @@ def process_whitelisted_sriov_pfs(
 
 
 def _configure_sriov_agent_service(snap: Snap, enabled: bool) -> None:
-    sriov_service = snap.services.list()["neutron-sriov-nic-agent"]
+    service = ["neutron-sriov-nic-agent"]
     if enabled:
         logging.info("SR-IOV mappings detected, enabling SR-IOV agent.")
-        _ensure_service_started(sriov_service)
+        _ensure_services_started(snap, service)
     else:
         logging.info("No SR-IOV mappings detected, disabling SR-IOV agent.")
-        _ensure_service_stopped(sriov_service)
+        _ensure_services_stopped(snap, service)
 
 
 def _set_config_context(context, group, key, val):
@@ -3053,7 +3078,6 @@ def configure(snap: Snap) -> None:
 
     context = _get_configure_context(snap)
     exclude_services = _get_exclude_services(context)
-    services = snap.services.list()
     ovs_external = is_ovs_external()
     logging.info(
         "OVS management: %s", "external (microovn)" if ovs_external else "internal (hypervisor)"
@@ -3061,8 +3085,7 @@ def configure(snap: Snap) -> None:
     internal_ovs_deferred = not ovs_external and not _internal_ovs_ready(snap)
     external_ovs_deferred = ovs_external and not _external_ovs_ready(snap)
     ovs_deferred = internal_ovs_deferred or external_ovs_deferred
-    for service in exclude_services:
-        _ensure_service_stopped(services[service])
+    _ensure_services_stopped(snap, exclude_services)
 
     with RestartOnChange(snap, {**TEMPLATES, **TLS_TEMPLATES}, exclude_services):
         _render_templates(snap, context)
@@ -3262,28 +3285,24 @@ def _ensure_internal_ovs_services(snap: Snap, exclude_services: list[str]) -> No
         snap: The snap reference.
         exclude_services: Services that should remain stopped.
     """
-    services = snap.services.list()
     enable_monitoring = snap.config.get("monitoring.enable")
-
-    for service in EXTERNAL_OVS_SERVICES:
-        if service in exclude_services:
-            continue
-        # ovs-exporter should only be enabled if monitoring is enabled
-        if service in MONITORING_SERVICES and not enable_monitoring:
-            continue
-        logging.info("Ensuring internal OVS service is enabled: %s", service)
-        _ensure_service_started(services[service])
+    desired = [
+        service
+        for service in EXTERNAL_OVS_SERVICES
+        if service not in exclude_services
+        and not (service in MONITORING_SERVICES and not enable_monitoring)
+    ]
+    logging.info("Ensuring internal OVS services are enabled: %s", desired)
+    _ensure_services_started(snap, desired)
 
 
 def _ensure_internal_ovs_dependent_services(snap: Snap, exclude_services: list[str]) -> None:
     """Ensure services that need internal OVS are enabled when not excluded."""
-    services = snap.services.list()
-
-    for service in INTERNAL_OVS_DEPENDENT_SERVICES:
-        if service in exclude_services:
-            continue
-        logging.info("Ensuring internal OVS-dependent service is enabled: %s", service)
-        _ensure_service_started(services[service])
+    desired = [
+        service for service in INTERNAL_OVS_DEPENDENT_SERVICES if service not in exclude_services
+    ]
+    logging.info("Ensuring internal OVS-dependent services are enabled: %s", desired)
+    _ensure_services_started(snap, desired)
 
 
 def _get_exclude_services(context: dict) -> list[str]:
