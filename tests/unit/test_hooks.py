@@ -64,6 +64,20 @@ class TestOwnedPath:
 class TestHooks:
     """Contains tests for openstack_hypervisor.hooks."""
 
+    @pytest.mark.parametrize(
+        ("machine", "expected"),
+        [
+            ("x86_64", "/snap/microovn/current/lib/x86_64-linux-gnu/dpdk/pmds-26.0"),
+            ("aarch64", "/snap/microovn/current/lib/aarch64-linux-gnu/dpdk/pmds-26.0"),
+        ],
+    )
+    def test_get_dpdk_pmd_dir_uses_microovn_runtime(self, mocker, machine, expected):
+        mocker.patch.object(hooks.platform, "machine", return_value=machine)
+        glob = mocker.patch.object(hooks.glob, "glob", return_value=[expected])
+
+        assert hooks._get_dpdk_pmd_dir() == expected
+        glob.assert_called_once_with(f"/snap/microovn/current/lib/{machine}-linux-gnu/dpdk/pmds-*")
+
     def test_set_nova_metadata_proxy_context_parses_url(self):
         """Nova metadata ingress URL is expanded for HAProxy rendering."""
         context = {"network": {"nova_metadata_proxy_url": "http://internal/nova-metadata"}}
@@ -795,8 +809,6 @@ def test_nova_conf_cpu_pinning_injection(
     mocker.patch("openstack_hypervisor.hooks._is_multipathd_available")
     for fn in [
         "_configure_ovs",
-        "_configure_ovn_base",
-        "_configure_ovn_external_networking",
         "_configure_ovn_base_external_ovs",
         "_configure_webdav_apache",
         "_configure_kvm",
@@ -1329,39 +1341,8 @@ def test_process_dpdk_ports_skipped(
     snap.config.set.assert_not_called()
 
 
-class TestExternalOVS:
-    """Tests for external OVS (ovn-chassis plug) functionality."""
-
-    def test_external_ovs_connected(self, mocker):
-        """Test external_ovs returns True when plug is connected."""
-        mock_check_call = mocker.patch("subprocess.check_call")
-        mock_check_call.return_value = 0
-        assert hooks.is_ovs_external() is True
-        mock_check_call.assert_called_once_with(
-            ["snapctl", "is-connected", hooks.OVN_CHASSIS_PLUG]
-        )
-
-    def test_external_ovs_disconnected(self, mocker):
-        """Test external_ovs returns False when plug is disconnected."""
-        import subprocess
-
-        mock_check_call = mocker.patch("subprocess.check_call")
-        mock_check_call.side_effect = subprocess.CalledProcessError(1, "cmd")
-        assert hooks.is_ovs_external() is False
-
-    def test_ovs_switch_socket_internal(self, mocker, snap):
-        """Test ovs_switch_socket returns internal socket when not connected."""
-        mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        result = hooks.ovs_switch_socket(snap)
-        assert "run/openvswitch/db.sock" in result
-        assert result.startswith("unix:")
-
-    def test_ovs_switch_socket_external(self, mocker, snap):
-        """Test ovs_switch_socket returns external socket when connected."""
-        mocker.patch.object(hooks, "is_ovs_external", return_value=True)
-        result = hooks.ovs_switch_socket(snap)
-        assert "microovn/chassis/switch/db.sock" in result
-        assert result.startswith("unix:")
+class TestMicroOVNOVS:
+    """Tests for the required MicroOVN OVS provider."""
 
     def test_configure_ovn_base_external_ovs_skips_without_ip(self, mocker, snap, ovs_cli):
         """Test external OVS base config skips when no IP is set."""
@@ -1371,213 +1352,20 @@ class TestExternalOVS:
 
         ovs_cli.set.assert_not_called()
 
-    def test_external_ovs_config_microovn_returns_true_without_plug(self, mocker):
-        """Config 'microovn' returns True even when ovn-chassis plug is disconnected."""
-        import subprocess
-
-        mock_check_call = mocker.patch("subprocess.check_call")
-        mock_check_call.side_effect = subprocess.CalledProcessError(1, "cmd")
-        hooks._OVS_MANAGED_BY = hooks.OVS_MANAGED_BY_MICROOVN
-
-        assert hooks.is_ovs_external() is True
-        mock_check_call.assert_not_called()
-
-    def test_external_ovs_config_hypervisor_returns_false_despite_plug(self, mocker):
-        """Config 'hypervisor' returns False even when ovn-chassis plug is connected."""
-        mock_check_call = mocker.patch("subprocess.check_call")
-        mock_check_call.return_value = 0
-        hooks._OVS_MANAGED_BY = hooks.OVS_MANAGED_BY_HYPERVISOR
-
-        assert hooks.is_ovs_external() is False
-        mock_check_call.assert_not_called()
-
-    def test_external_ovs_config_auto_falls_back_to_plug_connected(self, mocker):
-        """Config 'auto' checks the plug when connected."""
-        mock_check_call = mocker.patch("subprocess.check_call")
-        mock_check_call.return_value = 0
-        hooks._OVS_MANAGED_BY = hooks.OVS_MANAGED_BY_AUTO
-
-        assert hooks.is_ovs_external() is True
-        mock_check_call.assert_called_once_with(
-            ["snapctl", "is-connected", hooks.OVN_CHASSIS_PLUG]
-        )
-
-    def test_external_ovs_config_auto_falls_back_to_plug_disconnected(self, mocker):
-        """Config 'auto' checks the plug when disconnected."""
-        import subprocess
-
-        mock_check_call = mocker.patch("subprocess.check_call")
-        mock_check_call.side_effect = subprocess.CalledProcessError(1, "cmd")
-        hooks._OVS_MANAGED_BY = hooks.OVS_MANAGED_BY_AUTO
-
-        assert hooks.is_ovs_external() is False
-
-    def test_set_ovs_managed_by_microovn(self, snap):
-        """_set_ovs_managed_by caches 'microovn' from snap config."""
-        snap.config.get.return_value = hooks.OVS_MANAGED_BY_MICROOVN
-        hooks._set_ovs_managed_by(snap)
-        assert hooks._OVS_MANAGED_BY == hooks.OVS_MANAGED_BY_MICROOVN
-        snap.config.get.assert_called_once_with("network.ovs-managed-by")
-
-    def test_set_ovs_managed_by_hypervisor(self, snap):
-        """_set_ovs_managed_by caches 'hypervisor' from snap config."""
-        snap.config.get.return_value = hooks.OVS_MANAGED_BY_HYPERVISOR
-        hooks._set_ovs_managed_by(snap)
-        assert hooks._OVS_MANAGED_BY == hooks.OVS_MANAGED_BY_HYPERVISOR
-
-    def test_set_ovs_managed_by_auto(self, snap):
-        """_set_ovs_managed_by caches 'auto' from snap config."""
-        snap.config.get.return_value = hooks.OVS_MANAGED_BY_AUTO
-        hooks._set_ovs_managed_by(snap)
-        assert hooks._OVS_MANAGED_BY == hooks.OVS_MANAGED_BY_AUTO
-
-    def test_set_ovs_managed_by_invalid_falls_back_to_auto(self, snap):
-        """_set_ovs_managed_by falls back to 'auto' for unrecognised values."""
-        snap.config.get.return_value = "unknown-value"
-        hooks._set_ovs_managed_by(snap)
-        assert hooks._OVS_MANAGED_BY == hooks.OVS_MANAGED_BY_AUTO
-
-    def test_set_ovs_managed_by_none_falls_back_to_auto(self, snap):
-        """_set_ovs_managed_by falls back to 'auto' when config returns None."""
-        snap.config.get.return_value = None
-        hooks._set_ovs_managed_by(snap)
-        assert hooks._OVS_MANAGED_BY == hooks.OVS_MANAGED_BY_AUTO
-
-    def test_set_ovs_managed_by_clears_lru_cache(self, mocker, snap):
-        """_set_ovs_managed_by clears the is_ovs_external LRU cache."""
-        mock_cache_clear = mocker.patch.object(hooks.is_ovs_external, "cache_clear")
-        snap.config.get.return_value = hooks.OVS_MANAGED_BY_MICROOVN
-        hooks._set_ovs_managed_by(snap)
-        mock_cache_clear.assert_called_once()
-
-
-class TestExcludeServices:
-    """Tests for _get_exclude_services function."""
-
-    def test_exclude_external_ovs_services(self, mocker, snap):
-        """Test that external OVS services are excluded when plug is connected."""
-        mocker.patch.object(hooks, "is_ovs_external", return_value=True)
-        mocker.patch.object(hooks, "_services_not_ready", return_value=[])
-        mocker.patch.object(hooks, "_services_not_enabled_by_config", return_value=[])
-
-        result = hooks._get_exclude_services({})
-
-        assert "ovsdb-server" in result
-        assert "ovs-vswitchd" in result
-        assert "ovn-controller" in result
-        assert "ovs-exporter" in result
-
-    def test_exclude_services_internal_ovs(self, mocker, snap):
-        """Test that OVS services are not excluded when plug is disconnected."""
-        mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        mocker.patch.object(hooks, "_services_not_ready", return_value=[])
-        mocker.patch.object(hooks, "_services_not_enabled_by_config", return_value=[])
-
-        result = hooks._get_exclude_services({})
-
-        assert "ovsdb-server" not in result
-        assert "ovs-vswitchd" not in result
-        assert "ovn-controller" not in result
-
-
-class TestEnsureInternalOVSServices:
-    """Tests for _ensure_internal_ovs_services function."""
-
-    def test_starts_non_excluded_services(self, mocker, snap):
-        ensure_started = mocker.patch.object(hooks, "_ensure_services_started")
-        snap.config.get.return_value = True  # monitoring.enable = True
-
-        hooks._ensure_internal_ovs_services(snap, exclude_services=["ovsdb-server"])
-
-        ensure_started.assert_called_once_with(
-            snap, ["ovs-vswitchd", "ovn-controller", "ovs-exporter"]
-        )
-
-    def test_does_not_enable_ovs_exporter_when_monitoring_disabled(self, mocker, snap):
-        ensure_started = mocker.patch.object(hooks, "_ensure_services_started")
-        snap.config.get.return_value = False  # monitoring.enable = False
-
-        hooks._ensure_internal_ovs_services(snap, exclude_services=[])
-
-        ensure_started.assert_called_once_with(
-            snap, ["ovsdb-server", "ovs-vswitchd", "ovn-controller"]
-        )
-
-
-class TestEnsureInternalOVSDependentServices:
-    """Tests for _ensure_internal_ovs_dependent_services function."""
-
-    def test_starts_non_excluded_services(self, mocker, snap):
-        ensure_started = mocker.patch.object(hooks, "_ensure_services_started")
-        helper = getattr(hooks, "_ensure_internal_ovs_dependent_services", None)
-
-        assert helper is not None
-        helper(snap, exclude_services=[])
-
-        ensure_started.assert_called_once_with(snap, ["neutron-ovn-metadata-agent"])
-
-    def test_skips_excluded_services(self, mocker, snap):
-        ensure_started = mocker.patch.object(hooks, "_ensure_services_started")
-        helper = getattr(hooks, "_ensure_internal_ovs_dependent_services", None)
-
-        assert helper is not None
-        helper(snap, exclude_services=["neutron-ovn-metadata-agent"])
-
-        ensure_started.assert_called_once_with(snap, [])
-
-
-class TestInternalOVSReady:
-    """Tests for internal OVS readiness detection."""
-
-    def test_returns_true_when_socket_and_ctl_are_present(self, mocker, snap):
-        """Internal OVS is ready when both socket paths are present."""
-        mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        ovs_socket = hooks._ovs_socket_path(snap)
-        ovs_socket.parent.mkdir(parents=True, exist_ok=True)
-        ovs_socket.touch()
-        ctl_socket = snap.paths.common / "run" / "openvswitch" / "ovs-vswitchd.1234.ctl"
-        ctl_socket.touch()
-        mocker.patch.object(hooks, "ovs_switchd_ctl_socket", return_value=str(ctl_socket))
-
-        assert hooks._internal_ovs_ready(snap) is True
-
-    def test_returns_false_when_ctl_socket_is_missing(self, mocker, snap):
-        """Internal OVS is not ready without a switchd control socket."""
-        mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        ovs_socket = hooks._ovs_socket_path(snap)
-        ovs_socket.parent.mkdir(parents=True, exist_ok=True)
-        ovs_socket.touch()
-        mocker.patch.object(hooks, "ovs_switchd_ctl_socket", return_value=None)
-
-        assert hooks._internal_ovs_ready(snap) is False
-
 
 class TestConfigureMonitoringServices:
     """Tests for _configure_monitoring_services function."""
 
-    def test_external_ovs_monitoring_enabled_skips_ovs_exporter(self, mocker, snap):
-        """ovs-exporter is not started when OVS is external."""
-        mocker.patch.object(hooks, "is_ovs_external", return_value=True)
+    def test_monitoring_enabled_starts_libvirt_exporter(self, mocker, snap):
         ensure_started = mocker.patch.object(hooks, "_ensure_services_started")
-        snap.config.get.return_value = True  # monitoring.enable = True
+        snap.config.get.return_value = True
 
         hooks._configure_monitoring_services(snap)
 
         ensure_started.assert_called_once_with(snap, ["libvirt-exporter"])
 
-    def test_internal_ovs_monitoring_enabled_starts_all(self, mocker, snap):
-        """Test that all exporters are started when OVS is internal and monitoring enabled."""
-        mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        ensure_started = mocker.patch.object(hooks, "_ensure_services_started")
-        snap.config.get.return_value = True  # monitoring.enable = True
-
-        hooks._configure_monitoring_services(snap)
-
-        ensure_started.assert_called_once_with(snap, hooks.MONITORING_SERVICES)
-
     def test_monitoring_disabled_stops_all(self, mocker, snap):
         """Test that all exporters are stopped when monitoring is disabled."""
-        mocker.patch.object(hooks, "is_ovs_external", return_value=False)
         ensure_stopped = mocker.patch.object(hooks, "_ensure_services_stopped")
         snap.config.get.return_value = False  # monitoring.enable = False
 
@@ -1747,13 +1535,13 @@ class TestRestartOnChange:
 class TestConfigureTLS:
     """Tests for TLS configuration orchestration."""
 
-    def test_skips_ovn_tls_when_deferred(self, mocker, snap, ovs_cli):
-        """OVN TLS is skipped when internal OVS configuration is deferred."""
+    def test_skips_ovn_tls_when_deferred(self, mocker, snap):
+        """OVN TLS is skipped while MicroOVN configuration is deferred."""
         mock_ovn_tls = mocker.patch.object(hooks, "_configure_ovn_tls")
         mock_libvirt_tls = mocker.patch.object(hooks, "_configure_libvirt_tls")
         mock_cabundle_tls = mocker.patch.object(hooks, "_configure_cabundle_tls")
 
-        hooks._configure_tls(snap, ovs_cli, configure_ovn_tls=False)
+        hooks._configure_tls(snap, configure_ovn_tls=False)
 
         mock_ovn_tls.assert_not_called()
         mock_libvirt_tls.assert_called_once_with(snap)
@@ -1764,7 +1552,6 @@ class TestConfigureNetworking:
     """Tests for _configure_networking function."""
 
     def test_external_ovs_clears_restart_flag_when_ready(self, mocker, snap, ovs_cli):
-        mocker.patch.object(hooks, "is_ovs_external", return_value=True)
         mocker.patch.object(hooks, "_configure_ovn_base_external_ovs")
         mocker.patch.object(hooks, "_configure_ovs", return_value=False)
         mocker.patch.object(hooks, "_process_dpdk_ports")
@@ -1776,7 +1563,6 @@ class TestConfigureNetworking:
 
     def test_external_ovs_keeps_restart_flag_when_context_set(self, mocker, snap, ovs_cli):
         """Test that external-switch-restart is not overridden if already set in context."""
-        mocker.patch.object(hooks, "is_ovs_external", return_value=True)
         mocker.patch.object(hooks, "_configure_ovn_base_external_ovs")
         mocker.patch.object(hooks, "_configure_ovs", return_value=False)
         mocker.patch.object(hooks, "_process_dpdk_ports")
@@ -1793,316 +1579,35 @@ class TestConfigureNetworking:
                 # This should not happen when context has it set
                 assert False, "Should not override external_switch_restart when set in context"
 
-    def test_internal_ovs_always_restarts_when_required(self, mocker, snap, ovs_cli):
-        """Test that internal OVS restarts immediately when changes require it."""
-        mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        mocker.patch.object(hooks, "_configure_ovn_base")
-        mocker.patch.object(hooks, "_configure_ovn_external_networking")
+    def test_microovn_restart_is_signalled_when_required(self, mocker, snap, ovs_cli):
         mocker.patch.object(hooks, "_configure_ovs", return_value=True)
         mocker.patch.object(hooks, "_process_dpdk_ports")
-
-        # Mock the service
-        mock_service = mocker.MagicMock()
-        snap.services.list.return_value = {"ovs-vswitchd": mock_service}
+        mocker.patch.object(hooks, "_configure_ovn_base_external_ovs")
+        mocker.patch.object(hooks, "_dpdk_config_is_ready", return_value=True)
 
         hooks._configure_networking(snap, ovs_cli, {"network": {}})
 
-        # Should restart the service immediately
-        mock_service.stop.assert_called_once()
-        mock_service.start.assert_called_once_with(enable=True)
+        snap.config.set.assert_any_call({"network.external-switch-restart": True})
+        snap.services.list.assert_not_called()
 
 
 class TestConfigureOVSDeferred:
-    """Tests for configure-time deferred internal OVS behavior."""
+    """Tests for configure-time MicroOVN readiness."""
 
-    def test_internal_ovs_not_ready_defers_ovs_configuration(self, mocker, snap):
-        """Internal OVS work is deferred until a later configure hook."""
-        order = []
-        services = {"svc1": service_mock(enabled=True, active=True)}
-        snap.services.list.return_value = services
-        mocker.patch.object(hooks, "_mkdirs")
-        mocker.patch.object(hooks, "_update_default_config")
-        mocker.patch.object(hooks, "_setup_secrets")
-        mocker.patch.object(hooks, "_detect_compute_flavors")
-        mocker.patch.object(hooks, "_get_configure_context", return_value={"network": {}})
-        mocker.patch.object(hooks, "_get_exclude_services", return_value=["svc1"])
-        ensure_stopped = mocker.patch.object(hooks, "_ensure_services_stopped")
-        mocker.patch.object(hooks, "OVSCli", return_value=mock.Mock())
-        mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        mocker.patch.object(hooks, "_internal_ovs_ready", return_value=False)
-        mocker.patch.object(hooks, "RestartOnChange", return_value=nullcontext())
-        mocker.patch.object(hooks, "_render_templates")
-        mocker.patch.object(hooks, "_configure_webdav_apache")
-        mocker.patch.object(hooks, "_configure_kvm")
-        mocker.patch.object(hooks, "_configure_monitoring_services")
-        mocker.patch.object(hooks, "_configure_ceph")
-        mocker.patch.object(hooks, "_configure_masakari_services")
-        mocker.patch.object(hooks, "_configure_sriov_agent_service")
-        mocker.patch.object(
-            hooks, "_configure_tls", side_effect=lambda *_, **__: order.append("tls")
-        )
-        mocker.patch.object(
-            hooks, "_configure_networking", side_effect=lambda *_: order.append("network")
-        )
-        mocker.patch.object(
-            hooks,
-            "_ensure_internal_ovs_services",
-            side_effect=lambda *_: order.append("ensure"),
-        )
-        mocker.patch.object(
-            hooks,
-            "_ensure_internal_ovs_dependent_services",
-            side_effect=lambda *_: order.append("metadata"),
-            create=True,
-        )
-        # Simulate charm already configured (real identity URL) so the OVS
-        # startup guard does not interfere with what this test is checking.
-        snap.config.get_options.return_value.get.return_value = "http://10.0.0.1:5000/v3"
-
-        hooks.configure(snap)
-
-        ensure_stopped.assert_called_once_with(snap, ["svc1"])
-        assert order == ["tls", "ensure", "metadata"]
-
-    def test_internal_ovs_ready_runs_configuration(self, mocker, snap):
-        """Internal OVS configuration runs when the services are already ready."""
-        order = []
-        snap.services.list.return_value = {}
-        mocker.patch.object(hooks, "_mkdirs")
-        mocker.patch.object(hooks, "_update_default_config")
-        mocker.patch.object(hooks, "_setup_secrets")
-        mocker.patch.object(hooks, "_detect_compute_flavors")
-        mocker.patch.object(hooks, "_get_configure_context", return_value={"network": {}})
-        mocker.patch.object(hooks, "_get_exclude_services", return_value=[])
-        mocker.patch.object(hooks, "OVSCli", return_value=mock.Mock())
-        mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        mocker.patch.object(hooks, "_internal_ovs_ready", return_value=True)
-        mocker.patch.object(hooks, "RestartOnChange", return_value=nullcontext())
-        mocker.patch.object(hooks, "_render_templates")
-        mocker.patch.object(hooks, "_configure_webdav_apache")
-        mocker.patch.object(hooks, "_configure_kvm")
-        mocker.patch.object(hooks, "_configure_monitoring_services")
-        mocker.patch.object(hooks, "_configure_ceph")
-        mocker.patch.object(hooks, "_configure_masakari_services")
-        mocker.patch.object(hooks, "_configure_sriov_agent_service")
-        mocker.patch.object(
-            hooks, "_configure_tls", side_effect=lambda *_, **__: order.append("tls")
-        )
-        mocker.patch.object(
-            hooks, "_configure_networking", side_effect=lambda *_: order.append("network")
-        )
-        mocker.patch.object(
-            hooks,
-            "_ensure_internal_ovs_services",
-            side_effect=lambda *_: order.append("ensure"),
-        )
-        mocker.patch.object(
-            hooks,
-            "_ensure_internal_ovs_dependent_services",
-            side_effect=lambda *_: order.append("metadata"),
-            create=True,
-        )
-        # Simulate charm already configured (real identity URL) so the OVS
-        # startup guard does not interfere with what this test is checking.
-        snap.config.get_options.return_value.get.return_value = "http://10.0.0.1:5000/v3"
-
-        hooks.configure(snap)
-
-        assert order == ["tls", "network", "ensure", "metadata"]
-
-    def test_external_ovs_skips_internal_deferral_and_enable(self, mocker, snap):
-        """External OVS never triggers internal OVS bootstrap or enablement."""
-        snap.services.list.return_value = {}
-        mocker.patch.object(hooks, "_mkdirs")
-        mocker.patch.object(hooks, "_update_default_config")
-        mocker.patch.object(hooks, "_setup_secrets")
-        mocker.patch.object(hooks, "_detect_compute_flavors")
-        mocker.patch.object(hooks, "_get_configure_context", return_value={"network": {}})
-        mocker.patch.object(hooks, "_get_exclude_services", return_value=[])
-        mocker.patch.object(hooks, "OVSCli", return_value=mock.Mock())
-        mocker.patch.object(hooks, "is_ovs_external", return_value=True)
-        mocker.patch.object(hooks, "_external_ovs_ready", return_value=True)
-        mocker.patch.object(hooks, "RestartOnChange", return_value=nullcontext())
-        mocker.patch.object(hooks, "_render_templates")
-        mocker.patch.object(hooks, "_configure_webdav_apache")
-        mocker.patch.object(hooks, "_configure_tls")
-        mocker.patch.object(hooks, "_configure_networking")
-        mocker.patch.object(hooks, "_configure_kvm")
-        mocker.patch.object(hooks, "_configure_monitoring_services")
-        mocker.patch.object(hooks, "_configure_ceph")
-        mocker.patch.object(hooks, "_configure_masakari_services")
-        mocker.patch.object(hooks, "_configure_sriov_agent_service")
-        mock_ready = mocker.patch.object(hooks, "_internal_ovs_ready")
-        mock_ensure = mocker.patch.object(hooks, "_ensure_internal_ovs_services")
-        mock_metadata = mocker.patch.object(
-            hooks, "_ensure_internal_ovs_dependent_services", create=True
-        )
-
-        hooks.configure(snap)
-
-        mock_ready.assert_not_called()
-        mock_ensure.assert_not_called()
-        mock_metadata.assert_not_called()
-
-    def test_external_ovs_deferred_when_microovn_not_installed(self, mocker, snap):
-        """When microovn is not yet installed, OVS/OVN configuration is deferred."""
-        snap.services.list.return_value = {}
-        mocker.patch.object(hooks, "_mkdirs")
-        mocker.patch.object(hooks, "_update_default_config")
-        mocker.patch.object(hooks, "_setup_secrets")
-        mocker.patch.object(hooks, "_detect_compute_flavors")
-        mocker.patch.object(hooks, "_get_configure_context", return_value={"network": {}})
-        mocker.patch.object(hooks, "_get_exclude_services", return_value=[])
-        mocker.patch.object(hooks, "OVSCli", return_value=mock.Mock())
-        mocker.patch.object(hooks, "is_ovs_external", return_value=True)
-        # microovn socket does not exist yet
-        mocker.patch.object(hooks, "_external_ovs_ready", return_value=False)
-        mocker.patch.object(hooks, "RestartOnChange", return_value=nullcontext())
-        mocker.patch.object(hooks, "_render_templates")
-        mocker.patch.object(hooks, "_configure_webdav_apache")
-        mocker.patch.object(hooks, "_configure_kvm")
-        mocker.patch.object(hooks, "_configure_monitoring_services")
-        mocker.patch.object(hooks, "_configure_ceph")
-        mocker.patch.object(hooks, "_configure_masakari_services")
-        mocker.patch.object(hooks, "_configure_sriov_agent_service")
-        mock_configure_tls = mocker.patch.object(hooks, "_configure_tls")
-        mock_configure_networking = mocker.patch.object(hooks, "_configure_networking")
-
-        hooks.configure(snap)
-
-        # TLS must be deferred (configure_ovn_tls=False)
-        mock_configure_tls.assert_called_once()
-        _, kwargs = mock_configure_tls.call_args
-        assert kwargs.get("configure_ovn_tls") is False
-        # Networking must NOT be called
-        mock_configure_networking.assert_not_called()
-
-    def test_external_ovs_ready_check_uses_socket_path(self, mocker, snap, tmp_path):
-        """_external_ovs_ready returns True only when the OVS socket exists."""
-        mocker.patch.object(hooks, "is_ovs_external", return_value=True)
-        socket_file = tmp_path / "db.sock"
-        mocker.patch.object(hooks, "_ovs_socket_path", return_value=socket_file)
-
-        assert hooks._external_ovs_ready(snap) is False
-
-        socket_file.touch()
-        assert hooks._external_ovs_ready(snap) is True
-
-    def test_internal_ovs_not_started_on_unconfigured_first_run(self, mocker, snap):
-        """Internal OVS services must NOT be started while identity is unconfigured.
-
-        Snapd fires a configure hook automatically right after 'snap install', and
-        again when the charm calls ``snap set network.ovs-managed-by=auto`` in its
-        own install hook — both times before any real Keystone URL has been provided.
-        The snap detects this by checking that ``identity.auth-url`` still equals the
-        placeholder default.  In that state ``_ensure_internal_ovs_services`` must be
-        skipped to avoid creating ``system@ovs-system`` before microovn installs.
-        """
-        snap.services.list.return_value = {}
-        mocker.patch.object(hooks, "_mkdirs")
-        mocker.patch.object(hooks, "_update_default_config")
-        mocker.patch.object(hooks, "_setup_secrets")
-        mocker.patch.object(hooks, "_detect_compute_flavors")
-        mocker.patch.object(hooks, "_get_configure_context", return_value={"network": {}})
-        mocker.patch.object(hooks, "_get_exclude_services", return_value=[])
-        mocker.patch.object(hooks, "OVSCli", return_value=mock.Mock())
-        # OVS mode is 'auto' (default from conftest) and plug is not connected
-        mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        mocker.patch.object(hooks, "_internal_ovs_ready", return_value=True)
-        mocker.patch.object(hooks, "RestartOnChange", return_value=nullcontext())
-        mocker.patch.object(hooks, "_render_templates")
-        mocker.patch.object(hooks, "_configure_webdav_apache")
-        mocker.patch.object(hooks, "_configure_tls")
-        mocker.patch.object(hooks, "_configure_networking")
-        mocker.patch.object(hooks, "_configure_kvm")
-        mocker.patch.object(hooks, "_configure_monitoring_services")
-        mocker.patch.object(hooks, "_configure_ceph")
-        mocker.patch.object(hooks, "_configure_masakari_services")
-        mocker.patch.object(hooks, "_configure_sriov_agent_service")
-        mock_ensure = mocker.patch.object(hooks, "_ensure_internal_ovs_services")
-        mock_metadata = mocker.patch.object(
-            hooks, "_ensure_internal_ovs_dependent_services", create=True
-        )
-
-        # Simulate snap not yet configured by the charm: identity URL is the placeholder
-        # AND username has not been set yet (None).  Both conditions must hold for the
-        # guard to defer OVS startup.
-        def unconfigured_identity_get(key, default=None):
-            if key == "identity.auth-url":
-                return hooks.DEFAULT_CONFIG["identity.auth-url"]
-            if key == "identity.username":
-                return None
-            return default
-
-        snap.config.get_options.return_value.get.side_effect = unconfigured_identity_get
-
-        hooks.configure(snap)
-
-        # _ensure_internal_ovs_services must NOT have been called — starting
-        # ovs-vswitchd here would create system@ovs-system and block microovn.
-        mock_ensure.assert_not_called()
-        mock_metadata.assert_not_called()
-
-    def test_internal_ovs_started_when_managed_by_hypervisor_with_default_identity(
-        self, mocker, snap
+    @pytest.mark.parametrize(
+        "socket_available,networking_called",
+        [
+            (False, False),
+            (True, True),
+        ],
+    )
+    def test_microovn_socket_controls_network_configuration(
+        self, mocker, snap, socket_available, networking_called
     ):
-        """Internal OVS must start when explicitly managed by 'hypervisor'.
-
-        Even if ``identity.auth-url`` is still at the placeholder default and
-        ``identity.username`` has not been set (i.e. the charm hasn't configured
-        identity yet), setting ``network.ovs-managed-by`` to ``'hypervisor'`` must
-        bypass the guard and ensure internal OVS services are started.
-        """
-        snap.services.list.return_value = {}
-        mocker.patch.object(hooks, "_mkdirs")
-        mocker.patch.object(hooks, "_update_default_config")
-        mocker.patch.object(hooks, "_setup_secrets")
-        # Force OVS mode to 'hypervisor' (simulates charm explicitly setting it).
-        mocker.patch.object(
-            hooks,
-            "_set_ovs_managed_by",
-            side_effect=lambda _: setattr(
-                hooks, "_OVS_MANAGED_BY", hooks.OVS_MANAGED_BY_HYPERVISOR
-            ),
-        )
-        mocker.patch.object(hooks, "_detect_compute_flavors")
-        mocker.patch.object(hooks, "_get_configure_context", return_value={"network": {}})
-        mocker.patch.object(hooks, "_get_exclude_services", return_value=[])
-        mocker.patch.object(hooks, "OVSCli", return_value=mock.Mock())
-        mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        mocker.patch.object(hooks, "_internal_ovs_ready", return_value=True)
-        mocker.patch.object(hooks, "RestartOnChange", return_value=nullcontext())
-        mocker.patch.object(hooks, "_render_templates")
-        mocker.patch.object(hooks, "_configure_webdav_apache")
-        mocker.patch.object(hooks, "_configure_tls")
-        mocker.patch.object(hooks, "_configure_networking")
-        mocker.patch.object(hooks, "_configure_kvm")
-        mocker.patch.object(hooks, "_configure_monitoring_services")
-        mocker.patch.object(hooks, "_configure_ceph")
-        mocker.patch.object(hooks, "_configure_masakari_services")
-        mocker.patch.object(hooks, "_configure_sriov_agent_service")
-        mock_ensure = mocker.patch.object(hooks, "_ensure_internal_ovs_services")
-        mock_metadata = mocker.patch.object(
-            hooks, "_ensure_internal_ovs_dependent_services", create=True
-        )
-        # Identity is still unconfigured (placeholder URL, no username) — the guard
-        # must be bypassed because mode is explicitly 'hypervisor'.
-        snap.config.get_options.return_value.get.return_value = hooks.DEFAULT_CONFIG[
-            "identity.auth-url"
-        ]
-
-        hooks.configure(snap)
-
-        mock_ensure.assert_called_once()
-        mock_metadata.assert_called_once()
-
-    def test_internal_ovs_started_when_identity_configured(self, mocker, snap):
-        """Internal OVS must start once the charm has provided a real identity URL.
-
-        When ``identity.auth-url`` has been set to a real Keystone endpoint (anything
-        other than the placeholder default) and ``network.ovs-managed-by`` is 'auto'
-        with no plug connected, ``_ensure_internal_ovs_services`` must be called.
-        """
+        microovn_socket = snap.paths.data / "microovn/chassis/switch/db.sock"
+        if socket_available:
+            microovn_socket.parent.mkdir(parents=True)
+            microovn_socket.touch()
         snap.services.list.return_value = {}
         mocker.patch.object(hooks, "_mkdirs")
         mocker.patch.object(hooks, "_update_default_config")
@@ -2111,29 +1616,21 @@ class TestConfigureOVSDeferred:
         mocker.patch.object(hooks, "_get_configure_context", return_value={"network": {}})
         mocker.patch.object(hooks, "_get_exclude_services", return_value=[])
         mocker.patch.object(hooks, "OVSCli", return_value=mock.Mock())
-        mocker.patch.object(hooks, "is_ovs_external", return_value=False)
-        mocker.patch.object(hooks, "_internal_ovs_ready", return_value=True)
         mocker.patch.object(hooks, "RestartOnChange", return_value=nullcontext())
         mocker.patch.object(hooks, "_render_templates")
         mocker.patch.object(hooks, "_configure_webdav_apache")
-        mocker.patch.object(hooks, "_configure_tls")
-        mocker.patch.object(hooks, "_configure_networking")
         mocker.patch.object(hooks, "_configure_kvm")
         mocker.patch.object(hooks, "_configure_monitoring_services")
         mocker.patch.object(hooks, "_configure_ceph")
         mocker.patch.object(hooks, "_configure_masakari_services")
         mocker.patch.object(hooks, "_configure_sriov_agent_service")
-        mock_ensure = mocker.patch.object(hooks, "_ensure_internal_ovs_services")
-        mock_metadata = mocker.patch.object(
-            hooks, "_ensure_internal_ovs_dependent_services", create=True
-        )
-        # Charm has provided the real Keystone URL.
-        snap.config.get_options.return_value.get.return_value = "http://10.0.0.1:5000/v3"
+        configure_tls = mocker.patch.object(hooks, "_configure_tls")
+        configure_networking = mocker.patch.object(hooks, "_configure_networking")
 
         hooks.configure(snap)
 
-        mock_ensure.assert_called_once()
-        mock_metadata.assert_called_once()
+        assert configure_tls.call_args.kwargs["configure_ovn_tls"] is socket_available
+        assert configure_networking.called is networking_called
 
 
 class TestDPDKConfigReady:

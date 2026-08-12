@@ -136,57 +136,6 @@ apps:
       - network
       - microstack-support
 
-  # Openvswitch
-  ovs-vswitchd:
-    command: usr/share/openvswitch/scripts/ovs-ctl --no-ovsdb-server --no-monitor start
-    stop-command: usr/share/openvswitch/scripts/ovs-ctl --no-ovsdb-server stop
-    after: [ovsdb-server]
-    daemon: forking
-    install-mode: disable
-    plugs:
-      - network
-      - network-bind
-      - network-control
-      - firewall-control
-      - openvswitch-support
-      - process-control
-      - system-trace
-      - hardware-observe
-      - hugepages-control
-      - microstack-support
-
-  ovsdb-server:
-    command: "bin/ovsdb-server-service"
-    stop-command: usr/share/openvswitch/scripts/ovs-ctl --no-ovs-vswitchd stop
-    daemon: forking
-    install-mode: disable
-    plugs:
-      - network
-      - network-bind
-      - network-control
-      - openvswitch-support
-      - process-control
-      - system-trace
-      - microstack-support
-
-  # OVN
-  ovn-controller:
-    command: usr/share/ovn/scripts/ovn-ctl start_controller --no-monitor
-    stop-command: usr/share/ovn/scripts/ovn-ctl stop_controller --no-monitor --restart
-    daemon: forking
-    install-mode: disable
-    plugs:
-      - network
-      - network-bind
-      - network-control
-      - openvswitch-support
-      - process-control
-      - system-trace
-      - microstack-support
-    after:
-      - ovsdb-server
-      - ovs-vswitchd
-
   # OVS/OVN cli tools
   ovn-appctl:
     command: usr/bin/ovn-appctl
@@ -342,13 +291,6 @@ apps:
       - libvirt
       - network-bind
 
-  ovs-exporter:
-    command: 'bin/ovs-exporter-service'
-    plugs:
-      - network-bind
-    daemon: simple
-    install-mode: disable
-
 parts:
   snap-version:
     plugin: nil
@@ -372,39 +314,6 @@ parts:
     stage-packages:
     - on amd64:
       - msr-tools
-
-  ovs-exporter:
-    plugin: go
-    source: https://github.com/greenpau/ovs_exporter.git
-    source-tag: v1.0.7
-    build-packages:
-      - gcc
-      - golang-go
-    override-build: |
-      GIT_COMMIT=$(git describe --dirty --always)
-      GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD -- | head -1)
-      BUILD_USER=snapcraft
-      BUILD_DATE=$(date +"%Y-%m-%d")
-      BINARY=ovs-exporter
-      VERBOSE=-v
-      PROJECT=ovs_exporter
-      PKG_DIR=pkg/ovs_exporter
-      mkdir -p ./bin/
-      CGO_ENABLED=0 go build -o ./bin/${BINARY} \
-      -ldflags="-w -s \
-      -X github.com/prometheus/common/version.Version=$SNAPCRAFT_PROJECT_VERSION \
-      -X github.com/prometheus/common/version.Revision=$GIT_COMMIT \
-      -X github.com/prometheus/common/version.Branch=$GIT_BRANCH \
-      -X github.com/prometheus/common/version.BuildUser=$BUILD_USER \
-      -X github.com/prometheus/common/version.BuildDate=$BUILD_DATE \
-      -X ${PROJECT}/${PKG_DIR}.appName=$BINARY \
-      -X ${PROJECT}/${PKG_DIR}.appVersion=$SNAPCRAFT_PROJECT_VERSION \
-      -X ${PROJECT}/${PKG_DIR}.gitBranch=$GIT_BRANCH \
-      -X ${PROJECT}/${PKG_DIR}.gitCommit=$GIT_COMMIT \
-      -X ${PROJECT}/${PKG_DIR}.buildUser=$BUILD_USER \
-      -X ${PROJECT}/${PKG_DIR}.buildDate=$BUILD_DATE" \
-      ./cmd/ovs_exporter/*.go
-      install -D ./bin/${BINARY} $CRAFT_PART_INSTALL/bin/${BINARY}
 
   qemu:
     source: https://git.launchpad.net/ubuntu/+source/qemu
@@ -735,20 +644,9 @@ parts:
       - enable-patchelf
     stage-packages:
       - openvswitch-switch
-      - on amd64:
-        - openvswitch-switch-dpdk
-        - librte-meta-all
-        - driverctl
-      - on arm64:
-        - openvswitch-switch-dpdk
-        - librte-meta-all
-        - driverctl
+      # OVS runs in MicroOVN. Keep driverctl here for binding DPDK NICs.
+      - driverctl
       - ovn-host
-    override-build: |
-      craftctl default
-      if [ -f $CRAFT_PART_INSTALL/usr/lib/openvswitch-switch-dpdk/ovs-vswitchd-dpdk ]; then
-          mv $CRAFT_PART_INSTALL/usr/lib/openvswitch-switch-dpdk/ovs-vswitchd-dpdk $CRAFT_PART_INSTALL/usr/sbin/ovs-vswitchd
-      fi
 
   apache2-webdav:
     plugin: nil

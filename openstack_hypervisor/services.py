@@ -148,7 +148,7 @@ class NeutronOVNMetadataAgentService(OpenStackService):
     executable = Path("usr/bin/neutron-ovn-metadata-agent")
 
     def run(self, snap: Snap) -> int:
-        """Run neutron-ovn-metadata-agent once local OVSDB is ready."""
+        """Run neutron-ovn-metadata-agent once MicroOVN's OVSDB is ready."""
         setup_logging(snap.paths.common / f"{self.executable.name}-{snap.name}.log")
         ovsdb_connection = self._ovsdb_connection(snap)
         if not ovsdb_connection:
@@ -160,7 +160,7 @@ class NeutronOVNMetadataAgentService(OpenStackService):
         return super().run(snap)
 
     def _ovsdb_connection(self, snap: Snap) -> str | None:
-        """Read the configured local OVSDB connection string."""
+        """Read the configured MicroOVN OVSDB connection string."""
         config_path = snap.paths.common / "etc/neutron/neutron_ovn_metadata_agent.ini"
         parser = configparser.ConfigParser()
         try:
@@ -190,7 +190,7 @@ class NeutronOVNMetadataAgentService(OpenStackService):
 
         while True:
             if socket_path and not socket_path.exists():
-                logging.info("Waiting for local OVSDB socket: %s", socket_path)
+                logging.info("Waiting for MicroOVN OVSDB socket: %s", socket_path)
             elif self._ovsdb_schema_available(command):
                 return True
 
@@ -210,7 +210,7 @@ class NeutronOVNMetadataAgentService(OpenStackService):
                 stderr=subprocess.DEVNULL,
             )
         except OSError as exc:
-            logging.info("Unable to query local OVSDB schema yet: %s", exc)
+            logging.info("Unable to query MicroOVN OVSDB schema yet: %s", exc)
             return False
         return completed_process.returncode == 0
 
@@ -282,93 +282,6 @@ class PreEvacuationSetupService(OpenStackService):
 
 
 pre_evacuation_setup = partial(entry_point, PreEvacuationSetupService)
-
-
-class OVSDBServerService:
-    """A python service object used to run the ovsdb-server daemon."""
-
-    def run(self, snap: Snap) -> int:
-        """Runs the ovsdb-server service.
-
-        Invoked when this service is started.
-
-        :param snap: the snap context
-        :type snap: Snap
-        :return: exit code of the process
-        :rtype: int
-        """
-        setup_logging(snap.paths.common / f"ovsdb-server-{snap.name}.log")
-
-        executable = snap.paths.snap / "usr" / "share" / "openvswitch" / "scripts" / "ovs-ctl"
-        args = [
-            "--no-ovs-vswitchd",
-            "--no-monitor",
-            f"--system-id={snap.config.get('node.fqdn')}",
-            "start",
-        ]
-        cmd = [str(executable)]
-        cmd.extend(args)
-
-        completed_process = subprocess.run(cmd)
-
-        logging.info(f"Exiting with code {completed_process.returncode}")
-        return completed_process.returncode
-
-
-ovsdb_server = partial(entry_point, OVSDBServerService)
-
-
-class OVSExporterService:
-    """A python service object used to run the ovs-exporter daemon."""
-
-    def run(self, snap: Snap) -> int:
-        """Runs the ovs-exporter service.
-
-        Invoked when config monitoring is enable.
-
-        :param snap: the snap context
-        :type snap: Snap
-        :return: exit code of the process
-        :rtype: int
-        """
-        setup_logging(snap.paths.common / "ovs-exporter.log")
-        executable = snap.paths.snap / "bin" / "ovs-exporter"
-        listen_address = ":9475"
-        args = [
-            f"-web.listen-address={listen_address}",
-            "-database.vswitch.file.data.path",
-            f"{snap.paths.common}/etc/openvswitch/conf.db",
-            "-database.vswitch.file.log.path",
-            f"{snap.paths.common}/log/openvswitch/ovsdb-server.log",
-            "-database.vswitch.file.pid.path",
-            f"{snap.paths.common}/run/openvswitch/ovsdb-server.pid",
-            "-database.vswitch.file.system.id.path",
-            f"{snap.paths.common}/etc/openvswitch/system-id.conf",
-            "-database.vswitch.name",
-            "Open_vSwitch",
-            "-database.vswitch.socket.remote",
-            "unix:" + f"{snap.paths.common}/run/openvswitch/db.sock",
-            "-service.ovncontroller.file.log.path",
-            f"{snap.paths.common}/log/ovn/ovn-controller.log",
-            "-service.ovncontroller.file.pid.path",
-            f"{snap.paths.common}/run/ovn/ovn-controller.pid",
-            "-service.vswitchd.file.log.path",
-            f"{snap.paths.common}/log/openvswitch/ovs-vswitchd.log",
-            "-service.vswitchd.file.pid.path",
-            f"{snap.paths.common}/run/openvswitch/ovs-vswitchd.pid",
-            "-system.run.dir",
-            f"{snap.paths.common}/run/openvswitch",
-        ]
-        cmd = [str(executable)]
-        cmd.extend(args)
-
-        completed_process = subprocess.run(cmd)
-
-        logging.info(f"Exiting with code {completed_process.returncode}")
-        return completed_process.returncode
-
-
-ovs_exporter = partial(entry_point, OVSExporterService)
 
 
 class FileTransferService:

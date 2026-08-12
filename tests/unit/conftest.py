@@ -8,16 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from snaphelpers import Snap, SnapConfig, SnapServices
 
-from openstack_hypervisor import hooks
-
-
-@pytest.fixture(autouse=True)
-def clear_ovs_external_cache():
-    """Clear the lru_cache on is_ovs_external and reset the managed-by config before each test."""
-    hooks.is_ovs_external.cache_clear()
-    hooks._OVS_MANAGED_BY = hooks.OVS_MANAGED_BY_AUTO
-
-
 libvirt_mock = MagicMock()
 libvirt_mock.VIR_DOMAIN_RUNNING = 1
 libvirt_mock.VIR_DOMAIN_SHUTDOWN = 5

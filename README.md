@@ -5,6 +5,12 @@ This repository contains the source for the the OpenStack Hypervisor snap.
 This snap is designed to be used with a deployed OpenStack Control plane such
 as delivered by Sunbeam.
 
+## MicroOVN networking
+
+OpenStack Hypervisor configures Open vSwitch through MicroOVN. Connect the
+`ovn-chassis` content interface to provide the chassis socket; networking
+configuration is applied when MicroOVN is ready.
+
 ## Getting Started
 
 To get started with the OpenStack Hypervisor, install the snap using snapd:

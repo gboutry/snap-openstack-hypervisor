@@ -5,10 +5,8 @@ import base64
 import binascii
 import datetime
 import errno
-import functools
 import glob
 import hashlib
-import ipaddress
 import json
 import logging
 import math
@@ -46,10 +44,6 @@ from openstack_hypervisor.bridge_datapath import (
     OVSCli,
     OVSCommandError,
     OVSTimeoutError,
-    detect_current_mappings,
-    resolve_bridge_mappings,
-    resolve_ovs_changes,
-    update_mappings_from_rename,
 )
 from openstack_hypervisor.cli import pci_devices
 from openstack_hypervisor.cli.common import (
@@ -74,17 +68,6 @@ SECRETS = []
 DEFAULT_SECRET_LENGTH = 32
 TRUE_STRINGS = ("1", "t", "true", "on", "y", "yes")
 
-OVN_CHASSIS_PLUG = "ovn-chassis"
-
-# OVS management mode values for the network.ovs-managed-by snap config
-OVS_MANAGED_BY_AUTO = "auto"  # default: detect via ovn-chassis plug connection
-OVS_MANAGED_BY_MICROOVN = "microovn"  # external OVS managed by microovn snap
-OVS_MANAGED_BY_HYPERVISOR = "hypervisor"  # internal OVS managed by hypervisor snap
-
-# Module-level cache of the OVS management mode, set once per configure hook run.
-# Avoids threading snap through every function that checks OVS mode.
-_OVS_MANAGED_BY: str = OVS_MANAGED_BY_AUTO
-
 # NOTE(dmitriis): there is currently no way to make sure this directory gets
 # recreated on reboot which would normally be done via systemd-tmpfiles.
 # mkdir -p /run/lock/snap.$SNAP_INSTANCE_NAME
@@ -96,7 +79,6 @@ _OVS_MANAGED_BY: str = OVS_MANAGED_BY_AUTO
 
 COMMON_DIRS = [
     # etc
-    Path("etc/openvswitch"),
     Path("etc/ovn"),
     Path("etc/libvirt"),
     Path("etc/nova"),
@@ -122,12 +104,10 @@ COMMON_DIRS = [
     # log
     Path("log/libvirt/qemu"),
     Path("log/ovn"),
-    Path("log/openvswitch"),
     Path("log/nova"),
     Path("log/neutron"),
     # run
     Path("run/ovn"),
-    Path("run/openvswitch"),
     # lock
     Path("lock"),
     # Instances
@@ -183,7 +163,6 @@ SECRET_XML = string.Template("""
 # As defined in the snap/snapcraft.yaml
 MONITORING_SERVICES = [
     "libvirt-exporter",
-    "ovs-exporter",
 ]
 
 MASAKARI_SERVICES = ["masakari-instancemonitor", "pre-evacuation-setup"]
@@ -404,10 +383,6 @@ DEFAULT_CONFIG = {
     "masakari.enable": False,
     # Option to signal external switch restart is required
     "network.external-switch-restart": False,
-    # OVS management mode: 'auto' (detect via ovn-chassis plug), 'microovn' (external),
-    # or 'hypervisor' (internal). Set by charm when microovn may be installed after
-    # hypervisor to avoid the snap assuming internal OVS too early.
-    "network.ovs-managed-by": OVS_MANAGED_BY_AUTO,
 }
 
 
@@ -591,9 +566,6 @@ TEMPLATES = {
     },
     OwnedPath("etc/swtpm/swtpm-localca.options", owner=SNAP_USER, group=SNAP_GROUP): {
         "template": "swtpm-localca.options.j2",
-    },
-    Path("etc/openvswitch/system-id.conf"): {
-        "template": "system-id.conf.j2",
     },
     Path("etc/ceilometer/ceilometer.conf"): {
         "template": "ceilometer.conf.j2",
@@ -900,61 +872,6 @@ def _configure_ovn_base_external_ovs(snap: Snap, ovs_cli: OVSCli, context: dict)
     )
 
 
-def _configure_ovn_base(snap: Snap, ovs_cli: OVSCli, context: dict) -> None:
-    """Configure OVS/OVN.
-
-    :param snap: the snap reference
-    :type snap: Snap
-    :return: None
-    """
-    # Check for network specific IP address
-    ovn_encap_ip = snap.config.get("network.ip-address")
-    if not ovn_encap_ip:
-        # Fallback to general node IP
-        ovn_encap_ip = snap.config.get("node.ip-address")
-    system_id = snap.config.get("node.fqdn")
-    if not ovn_encap_ip and system_id:
-        logging.info("OVN IP and System ID not configured, skipping.")
-        return
-    datapath_type = _get_datapath_type(context)
-    logging.info(
-        "Configuring Open vSwitch geneve tunnels and system id. "
-        "ovn-encap-ip = %s, system-id = %s, "
-        "datapath-type = %s",
-        ovn_encap_ip,
-        system_id,
-        datapath_type,
-    )
-    ovs_cli.set(
-        "open",
-        ".",
-        "external_ids",
-        {
-            "ovn-encap-type": "geneve",
-            "ovn-encap-ip": ovn_encap_ip,
-            "system-id": system_id,
-            "hostname": system_id,
-            "ovn-bridge-datapath-type": datapath_type,
-        },
-    )
-
-    # note(gboutry): previously, this value was set to true by default. However,
-    # it broke when there's a mismatch between ovn-northd and ovn-controller.
-    # As part of #123, the setting has been removed from being set. But not cleared
-    # on upgrade. Clear the setting so that it can return to its default value.
-    ovs_cli.remove("open", ".", "external_ids", "ovn-match-northd-version")
-
-    try:
-        sb_conn = snap.config.get("network.ovn-sb-connection")
-    except UnknownConfigKey:
-        sb_conn = None
-    if not sb_conn:
-        logging.info("OVN SB connection URL not configured, skipping.")
-        return
-
-    ovs_cli.set("open", ".", "external_ids", {"ovn-remote": sb_conn})
-
-
 def _dpdk_supported() -> bool:
     supported_platforms = ["aarch64", "x86_64"]
     this_platform = platform.machine()
@@ -968,13 +885,18 @@ def _dpdk_supported() -> bool:
     return True
 
 
-def _get_dpdk_pmd_dir(snap: Snap) -> str:
-    # We'll need the "current" symlink so that the path remains valid during upgrades.
+def _get_dpdk_pmd_dir() -> str:
+    """Return MicroOVN's DPDK PMD directory.
+
+    The switch that loads these plugins belongs to MicroOVN, so its plugin
+    directory must come from the MicroOVN snap rather than this snap.  Use the
+    ``current`` symlink so the configuration remains valid across refreshes.
+    """
     glob_pattern = (
         Path("/snap")
-        / Path(snap.name)
+        / Path("microovn")
         / Path("current")
-        / Path("usr/lib/x86_64-linux-gnu/dpdk/pmds-*")
+        / Path(f"lib/{platform.machine()}-linux-gnu/dpdk/pmds-*")
     )
     pmd_dirs = glob.glob(str(glob_pattern))
     if not pmd_dirs:
@@ -992,7 +914,7 @@ def _configure_ovs(snap: Snap, ovs_cli: OVSCli, context: dict) -> bool:
 
     Returns:
         True if any OVS configuration changes were made that require a restart,
-        False otherwise (including when external OVS is being used).
+        False otherwise.
     """
     config_changed = False
 
@@ -1016,7 +938,7 @@ def _configure_ovs(snap: Snap, ovs_cli: OVSCli, context: dict) -> bool:
         logging.info("Configuring Open vSwitch to use DPDK.")
         dpdk_settings["dpdk-init"] = "try"
         # Point DPDK to the right PMD plugin directory.
-        pmd_lib_dir = _get_dpdk_pmd_dir(snap)
+        pmd_lib_dir = _get_dpdk_pmd_dir()
         dpdk_settings["dpdk-extra"] = f"-d {pmd_lib_dir}"
     else:
         dpdk_settings["dpdk-init"] = "false"
@@ -1727,178 +1649,6 @@ def _add_dpdk_bond(
             raise
 
 
-def _config_get(
-    snap: Snap,
-) -> typing.Callable[typing.Concatenate[str, ...], typing.Any]:
-    """Get a config value with a default fallback.
-
-    :param snap: the snap reference
-    :type snap: Snap
-    :return: a function that retrieves config values with a default
-    :rtype: Callable[[str, Any], Any]
-    """
-
-    def _getter(key: str, default: typing.Any = None) -> typing.Any:
-        try:
-            return snap.config.get(key)
-        except UnknownConfigKey:
-            return default
-
-    return _getter
-
-
-def get_machine_id() -> str:
-    """Retrieve the machine-id of the system.
-
-    :return: the machine-id string
-    :rtype: str
-    """
-    with open("/etc/machine-id", "r") as f:
-        return f.read().strip()
-
-
-def _configure_ovn_external_networking(  # noqa: C901
-    snap: Snap, ovs_cli: OVSCli, context: dict
-) -> None:
-    """Configure OVS/OVN external networking.
-
-    :param snap: the snap reference
-    :type snap: Snap
-    :return: None
-    """
-    try:
-        sb_conn = snap.config.get("network.ovn-sb-connection")
-    except UnknownConfigKey:
-        sb_conn = None
-    if not sb_conn:
-        logging.info("OVN SB connection URL not configured, skipping.")
-        return
-
-    config = _config_get(snap)
-
-    mappings = resolve_bridge_mappings(
-        config("network.external-bridge"),
-        config("network.physnet-name"),
-        config("network.external-nic"),
-        config("network.bridge-mapping"),
-    )
-
-    if not mappings:
-        logging.info("OVN external networking not configured, skipping.")
-        return
-
-    external_bridge_address = snap.config.get("network.external-bridge-address")
-    if len(mappings) > 1 and external_bridge_address != IPVANYNETWORK_UNSET:
-        logging.warning(
-            "External bridge address configuration is supported only for localnet (i.e. no external nics)."
-        )
-        return
-
-    current_mappings = detect_current_mappings(ovs_cli)
-
-    changes = resolve_ovs_changes(current_mappings, mappings)
-    logging.debug("OVS external networking changes: %s", changes)
-
-    mappings = update_mappings_from_rename(mappings, changes["renamed_bridges"])
-
-    for bridge, change in changes["interface_changes"].items():
-        for iface in change["removed"]:
-            logging.info(f"Removing interface {iface} from bridge {bridge}")
-            _del_interface_from_bridge(ovs_cli, bridge, iface)
-            # Adding interfaces is handled later.
-
-    for bridge in changes["removed_bridges"]:
-        logging.info(f"Removing ovs bridge {bridge}")
-        ovs_cli.del_bridge(bridge)
-
-    for bridge in changes["added_bridges"]:
-        logging.info(f"Adding ovs bridge {bridge}")
-        ovs_cli.add_bridge(bridge, _get_datapath_type(context), "protocols=OpenFlow13,OpenFlow15")
-
-    ovs_cli.set(
-        "open",
-        ".",
-        "external_ids",
-        {"ovn-bridge-mappings": ",".join(mapping.physnet_bridge_pair() for mapping in mappings)},
-    )
-
-    for mapping in mappings:
-        _wait_for_interface(mapping.bridge)
-
-    comment = "openstack-hypervisor external network rule"
-    if len(mappings) == 1 and external_bridge_address != IPVANYNETWORK_UNSET:
-        # We only support localnet mode for a single virtual physnet
-        mapping = mappings[0]
-        logging.info(f"configuring external bridge {mapping.bridge}")
-        _add_ip_to_interface(mapping.bridge, external_bridge_address)
-        external_network = ipaddress.ip_interface(external_bridge_address).network
-        _add_iptable_postrouting_rule(str(external_network), comment)
-        _enable_chassis_as_gateway(ovs_cli)
-        return
-
-    # We're in external net mode
-    _delete_iptable_postrouting_rule(comment)
-    enable_as_gateway = False
-    for mapping in mappings:
-        logging.info(f"Resetting external bridge {mapping.bridge} configuration")
-        _delete_ips_from_interface(mapping.bridge)
-        if mapping.interface:
-            logging.info(f"Adding {mapping.interface} to {mapping.bridge}")
-            _ensure_single_nic_on_bridge(ovs_cli, mapping.bridge, mapping.interface)
-            _ensure_link_up(mapping.interface)
-            enable_as_gateway = True
-        else:
-            logging.info(f"Removing nics from {mapping.bridge}")
-            _del_external_nics_from_bridge(ovs_cli, mapping.bridge)
-
-    machine_id = get_machine_id()
-
-    ovs_cli.set(
-        "open",
-        ".",
-        "external_ids",
-        {
-            "ovn-chassis-mac-mappings": ",".join(
-                mapping.physnet_mac_pair(machine_id) for mapping in mappings
-            )
-        },
-    )
-
-    # If we have at least one external nic, enable chassis as gateway
-    if enable_as_gateway:
-        _enable_chassis_as_gateway(ovs_cli)
-    else:
-        _disable_chassis_as_gateway(ovs_cli)
-
-
-def _enable_chassis_as_gateway(ovs_cli: OVSCli):
-    """Enable OVS as an external chassis gateway."""
-    logging.info("Enabling OVS as external gateway")
-    ovs_cli.set(
-        "open",
-        ".",
-        "external_ids",
-        {"ovn-cms-options": "enable-chassis-as-gw"},
-    )
-
-
-def _disable_chassis_as_gateway(ovs_cli: OVSCli):
-    """Disable OVS as an external chassis gateway."""
-    logging.info("Disabling OVS as external gateway")
-    ovs_cli.remove("open", ".", "external_ids", "ovn-cms-options")
-
-
-def _ensure_link_up(interface: str):
-    """Ensure link status is up for an interface.
-
-    :param: interface: network interface to set link up
-    :type interface: str
-    """
-    ipr = IPRoute()
-    dev = ipr.link_lookup(ifname=interface)[0]
-    ipr.link("set", index=dev, state="up")
-
-
 def _parse_tls(snap: Snap, config_key: str) -> bytes | None:
     """Parse Base64 encoded key or cert.
 
@@ -1914,18 +1664,17 @@ def _parse_tls(snap: Snap, config_key: str) -> bytes | None:
     return None
 
 
-def _configure_tls(snap: Snap, ovs_cli: OVSCli, configure_ovn_tls: bool = True) -> None:
+def _configure_tls(snap: Snap, configure_ovn_tls: bool = True) -> None:
     """Configure TLS.
 
-    Configures TLS for OVN (when using internal OVS), libvirt, and CA bundles.
+    Configures TLS for OVN through MicroOVN, libvirt, and CA bundles.
 
     Args:
         snap: The snap reference.
-        ovs_cli: The OVSCli instance.
         configure_ovn_tls: Whether OVN TLS should be applied to OVS now.
     """
     if configure_ovn_tls:
-        _configure_ovn_tls(snap, ovs_cli, is_ovs_external())
+        _configure_ovn_tls(snap)
     else:
         logging.info("OVS not ready, deferring OVN TLS configuration.")
     _configure_libvirt_tls(snap)
@@ -2336,15 +2085,11 @@ def _configure_webdav_apache(snap: Snap, context: dict) -> None:
     webdav_cfg_path.chmod(0o644)
 
 
-def _configure_ovn_tls(snap: Snap, ovs_cli: OVSCli, external: bool) -> None:
-    """Configure OVS/OVN TLS.
+def _configure_ovn_tls(snap: Snap) -> None:
+    """Write OVN TLS material used with MicroOVN.
 
     :param snap: the snap reference
     :type snap: Snap
-    :param ovs_cli: the OVSCli instance
-    :type ovs_cli: OVSCli
-    :param external: whether OVS is external
-    :type external: bool
     :return: None
     """
     try:
@@ -2368,11 +2113,6 @@ def _configure_ovn_tls(snap: Snap, ovs_cli: OVSCli, external: bool) -> None:
     ssl_cert.chmod(DEFAULT_PERMS)
     ssl_key.write_bytes(ovn_key)
     ssl_key.chmod(PRIVATE_PERMS)
-
-    if not external:
-        ovs_cli.set_ssl(str(ssl_key), str(ssl_cert), str(ssl_cacert))
-    else:
-        logging.info("Skipping OVS TLS configuration for external OVS")
 
 
 def _is_kvm_api_available() -> bool:
@@ -2563,27 +2303,14 @@ def _configure_ceph(snap) -> None:
 
 
 def _configure_networking(snap: Snap, ovs_cli: OVSCli, context: dict) -> None:
-    """Configure networking."""
-    # Only configure OVS/OVN base settings when using internal OVS
-    is_external_ovs = is_ovs_external()
-    is_internal_ovs = not is_external_ovs
-    if is_internal_ovs:
-        _configure_ovn_base(snap, ovs_cli, context)
-        _configure_ovn_external_networking(snap, ovs_cli, context)
-    else:
-        _configure_ovn_base_external_ovs(snap, ovs_cli, context)
+    """Configure networking against MicroOVN's OVSDB."""
+    _configure_ovn_base_external_ovs(snap, ovs_cli, context)
 
     ovs_restart_required = _configure_ovs(snap, ovs_cli, context)
 
     if ovs_restart_required:
-        if is_internal_ovs:
-            logging.info("internal-ovs: Restarting ovs-vswitchd to apply changes.")
-            ovs_vswitchd_service = snap.services.list()["ovs-vswitchd"]
-            ovs_vswitchd_service.stop()
-            ovs_vswitchd_service.start(enable=True)
-        else:
-            logging.info("external-ovs: Marking ovs-vswitchd for restart to apply changes.")
-            snap.config.set({"network.external-switch-restart": True})
+        logging.info("Marking MicroOVN's ovs-vswitchd for restart to apply changes.")
+        snap.config.set({"network.external-switch-restart": True})
     else:
         logging.info("ovs-vswitchd restart not required.")
         # Do not override if the context already has the key set, it means
@@ -2593,16 +2320,14 @@ def _configure_networking(snap: Snap, ovs_cli: OVSCli, context: dict) -> None:
 
     _process_dpdk_ports(snap, ovs_cli, context)
 
-    # Check DPDK readiness when using external OVS
-    if is_external_ovs:
-        dpdk_ready = _dpdk_config_is_ready(snap, ovs_cli, context)
-        if not dpdk_ready:
-            logging.warning("DPDK configuration not ready - external OVS restart may be required")
-        else:
-            logging.info("DPDK configuration is ready")
-        # Do not set the network.external-switch-restart on detecting the current config,
-        # it's a bit unreliable for now. Set it when we actually change settings that require
-        # the restart
+    dpdk_ready = _dpdk_config_is_ready(snap, ovs_cli, context)
+    if not dpdk_ready:
+        logging.warning("DPDK configuration not ready - MicroOVN restart may be required")
+    else:
+        logging.info("DPDK configuration is ready")
+    # Do not set the network.external-switch-restart on detecting the current config,
+    # it's a bit unreliable for now. Set it when we actually change settings that require
+    # the restart
 
 
 def _configure_kvm(snap: Snap) -> None:
@@ -2649,17 +2374,8 @@ def _configure_monitoring_services(snap: Snap) -> None:
     """
     enable_monitoring = snap.config.get("monitoring.enable")
     if enable_monitoring:
-        ovs_external = is_ovs_external()
-        if ovs_external:
-            logging.info("Enabling exporter services (skipping external OVS exporters).")
-        else:
-            logging.info("Enabling all exporter services.")
-        desired = [
-            service
-            for service in MONITORING_SERVICES
-            if not (ovs_external and service in EXTERNAL_OVS_SERVICES)
-        ]
-        _ensure_services_started(snap, desired)
+        logging.info("Enabling exporter services.")
+        _ensure_services_started(snap, MONITORING_SERVICES)
     else:
         logging.info("Disabling all exporter services.")
         _ensure_services_stopped(snap, MONITORING_SERVICES)
@@ -2919,82 +2635,15 @@ def _to_json_list(val):
     return [json.dumps(element) for element in val]
 
 
-def is_connected(name: str) -> bool:
-    """Check if a plug or slot is connected.
-
-    :param name: the plug/slot name.
-    :return: whether the plug/slot is connected.
-    """
-    try:
-        subprocess.check_call(["snapctl", "is-connected", name])
-        return True
-    except subprocess.CalledProcessError:
-        return False
-
-
-def _set_ovs_managed_by(snap: Snap) -> None:
-    """Read network.ovs-managed-by from snap config and cache it for this hook run.
-
-    Must be called once at the start of the configure hook, after defaults have
-    been applied, and before any code that calls is_ovs_external().
-
-    Valid values for network.ovs-managed-by:
-      - 'auto'       (default) detect by whether ovn-chassis plug is connected
-      - 'microovn'   force external OVS; microovn manages OVS (may be installed later)
-      - 'hypervisor' force internal OVS; hypervisor snap manages OVS
-    """
-    global _OVS_MANAGED_BY
-
-    value = snap.config.get("network.ovs-managed-by") or OVS_MANAGED_BY_AUTO
-    if value not in (OVS_MANAGED_BY_AUTO, OVS_MANAGED_BY_MICROOVN, OVS_MANAGED_BY_HYPERVISOR):
-        logging.warning(
-            "Unrecognised network.ovs-managed-by value %r, falling back to 'auto'", value
-        )
-        value = OVS_MANAGED_BY_AUTO
-
-    _OVS_MANAGED_BY = value
-    is_ovs_external.cache_clear()
-    logging.info("OVS managed-by mode: %s", _OVS_MANAGED_BY)
-
-
-@functools.lru_cache(maxsize=1)
-def is_ovs_external() -> bool:
-    """Return True if OVS is managed externally (by microovn), False otherwise.
-
-    Checks network.ovs-managed-by snap config (cached in _OVS_MANAGED_BY) first:
-      - 'microovn'   -> True  (external OVS; microovn may not yet be installed)
-      - 'hypervisor' -> False (internal OVS; ignore plug state)
-      - 'auto'       -> check whether the ovn-chassis content plug is connected
-
-    Result is cached for the duration of a single configure hook execution to
-    avoid repeated subprocess calls.  Call _set_ovs_managed_by() at the start
-    of each configure hook run to refresh the cache.
-    """
-    if _OVS_MANAGED_BY == OVS_MANAGED_BY_MICROOVN:
-        logging.debug("OVS managed-by=microovn, treating as external OVS.")
-        return True
-    if _OVS_MANAGED_BY == OVS_MANAGED_BY_HYPERVISOR:
-        logging.debug("OVS managed-by=hypervisor, treating as internal OVS.")
-        return False
-    # OVS_MANAGED_BY_AUTO: fall back to plug connection check
-    return is_connected(OVN_CHASSIS_PLUG)
-
-
 def ovs_switch_path(snap: Snap) -> Path:
-    """Get the OVS switch path.
+    """Get MicroOVN's OVS switch path.
 
     :param snap: the snap reference
     :type snap: Snap
     :return: the OVS switch path
     :rtype: Path
     """
-    if not is_ovs_external():
-        logging.debug("%s not connected, internal ovs.", OVN_CHASSIS_PLUG)
-        switch_path = snap.paths.common / "run/openvswitch/"
-    else:
-        logging.debug("%s connected, external ovs.", OVN_CHASSIS_PLUG)
-        switch_path = snap.paths.data / "microovn/chassis/switch/"
-    return switch_path
+    return snap.paths.data / "microovn/chassis/switch/"
 
 
 def ovs_switch_socket(snap: Snap) -> str:
@@ -3030,21 +2679,8 @@ def ovs_switchd_ctl_socket(snap: Snap) -> str | None:
     return str(switch_path / f"ovs-vswitchd.{pid_value}.ctl")
 
 
-def _internal_ovs_ready(snap: Snap) -> bool:
-    """Return whether internal OVS runtime artifacts are present."""
-    ovs_socket_path = _ovs_socket_path(snap)
-    ctl_socket = ovs_switchd_ctl_socket(snap)
-    return ovs_socket_path.exists() and bool(ctl_socket and Path(ctl_socket).exists())
-
-
-def _external_ovs_ready(snap: Snap) -> bool:
-    """Return whether the external OVS (microovn) socket is present.
-
-    When network.ovs-managed-by=microovn is set but microovn has not yet been
-    installed, the socket file will be absent and all ovs-vsctl commands would
-    hang.  This check allows the configure hook to defer OVS/OVN networking
-    configuration until microovn is actually available.
-    """
+def _microovn_ovs_ready(snap: Snap) -> bool:
+    """Return whether MicroOVN's OVSDB socket is present."""
     return _ovs_socket_path(snap).exists()
 
 
@@ -3065,10 +2701,6 @@ def configure(snap: Snap) -> None:
     _mkdirs(snap)
     _update_default_config(snap)
     _setup_secrets(snap)
-    # Cache OVS management mode from snap config before any is_ovs_external() calls.
-    # This allows the charm to set network.ovs-managed-by=microovn so that the snap
-    # behaves correctly even when microovn is installed after openstack-hypervisor.
-    _set_ovs_managed_by(snap)
     _detect_compute_flavors(snap)
 
     ovs_socket = ovs_switch_socket(snap)
@@ -3078,38 +2710,23 @@ def configure(snap: Snap) -> None:
 
     context = _get_configure_context(snap)
     exclude_services = _get_exclude_services(context)
-    ovs_external = is_ovs_external()
-    logging.info(
-        "OVS management: %s", "external (microovn)" if ovs_external else "internal (hypervisor)"
-    )
-    internal_ovs_deferred = not ovs_external and not _internal_ovs_ready(snap)
-    external_ovs_deferred = ovs_external and not _external_ovs_ready(snap)
-    ovs_deferred = internal_ovs_deferred or external_ovs_deferred
+    ovs_deferred = not _microovn_ovs_ready(snap)
     _ensure_services_stopped(snap, exclude_services)
 
     with RestartOnChange(snap, {**TEMPLATES, **TLS_TEMPLATES}, exclude_services):
         _render_templates(snap, context)
-        _configure_tls(snap, ovs_cli, configure_ovn_tls=not ovs_deferred)
+        _configure_tls(snap, configure_ovn_tls=not ovs_deferred)
         _configure_webdav_apache(snap, context)
 
-    if internal_ovs_deferred:
+    if ovs_deferred:
         logging.info(
-            "Internal OVS is not ready yet, deferring OVS/OVN configuration until the next "
-            "configure hook."
-        )
-    elif external_ovs_deferred:
-        logging.info(
-            "External OVS (microovn) socket not present yet, deferring OVS/OVN configuration "
+            "MicroOVN OVSDB socket not present yet, deferring OVS/OVN configuration "
             "until the next configure hook. Install microovn or connect the ovn-chassis plug."
         )
     else:
         try:
             _configure_networking(snap, ovs_cli, context)
         except OVSTimeoutError as e:
-            if not is_ovs_external():
-                # Don't suppress timeouts when using internal OVS
-                # Only on refreshing with an external OVS does a timeout occur
-                raise
             logging.warning(f"Suppressing timeout, expected during a refresh of the snap: {e}")
     _configure_kvm(snap)
     _configure_monitoring_services(snap)
@@ -3118,38 +2735,6 @@ def configure(snap: Snap) -> None:
     _configure_sriov_agent_service(
         snap, bool(context.get("network", {}).get("sriov_nic_physical_device_mappings"))
     )
-    if not ovs_external:
-        # When OVS mode is 'auto', the snap doesn't yet know whether microovn will be
-        # used.  The reliable signal that the charm has finished its initial configuration
-        # is that identity credentials have been set: identity.auth-url is a real Keystone
-        # endpoint (not the placeholder default) AND identity.username has been provided.
-        # Until then, skip starting ovs-vswitchd: creating system@ovs-system here would
-        # block a concurrently-installing microovn snap.
-        #
-        # Checking both fields guards against the edge case where an operator legitimately
-        # runs Keystone at http://localhost:5000/v3 — in that scenario the charm will
-        # always have set identity.username so the guard still clears correctly.
-        #
-        # When OVS mode is explicitly 'hypervisor' (operator/charm intent is clear),
-        # bypass this check and start internal OVS immediately.
-        identity_opts = snap.config.get_options("identity")
-        identity_url = identity_opts.get("identity.auth-url")
-        identity_username = identity_opts.get("identity.username")
-        charm_not_configured = (
-            _OVS_MANAGED_BY == OVS_MANAGED_BY_AUTO
-            and identity_url == DEFAULT_CONFIG["identity.auth-url"]
-            and identity_username is None
-        )
-        if charm_not_configured:
-            logging.info(
-                "identity.auth-url is still the default placeholder and "
-                "identity.username is unset: the charm has not yet applied "
-                "configuration. Deferring internal OVS service startup to avoid "
-                "creating system@ovs-system before microovn can install."
-            )
-        else:
-            _ensure_internal_ovs_services(snap, exclude_services)
-            _ensure_internal_ovs_dependent_services(snap, exclude_services)
 
 
 def _get_configure_context(snap: Snap) -> dict:
@@ -3265,53 +2850,12 @@ def _set_nova_metadata_proxy_context(context: dict) -> None:
     network["nova_metadata_proxy_ssl"] = parsed.scheme == "https"
 
 
-# Services to exclude when using external OVS (ovn-chassis plug connected)
-EXTERNAL_OVS_SERVICES = [
-    "ovsdb-server",
-    "ovs-vswitchd",
-    "ovn-controller",
-    "ovs-exporter",
-]
-
-INTERNAL_OVS_DEPENDENT_SERVICES = [
-    "neutron-ovn-metadata-agent",
-]
-
-
-def _ensure_internal_ovs_services(snap: Snap, exclude_services: list[str]) -> None:
-    """Ensure internal OVS services are enabled when not excluded.
-
-    Args:
-        snap: The snap reference.
-        exclude_services: Services that should remain stopped.
-    """
-    enable_monitoring = snap.config.get("monitoring.enable")
-    desired = [
-        service
-        for service in EXTERNAL_OVS_SERVICES
-        if service not in exclude_services
-        and not (service in MONITORING_SERVICES and not enable_monitoring)
-    ]
-    logging.info("Ensuring internal OVS services are enabled: %s", desired)
-    _ensure_services_started(snap, desired)
-
-
-def _ensure_internal_ovs_dependent_services(snap: Snap, exclude_services: list[str]) -> None:
-    """Ensure services that need internal OVS are enabled when not excluded."""
-    desired = [
-        service for service in INTERNAL_OVS_DEPENDENT_SERVICES if service not in exclude_services
-    ]
-    logging.info("Ensuring internal OVS-dependent services are enabled: %s", desired)
-    _ensure_services_started(snap, desired)
-
-
 def _get_exclude_services(context: dict) -> list[str]:
-    """Get list of services to exclude based on configuration and external OVS state.
+    """Get services to stop based on their configuration.
 
     Returns a list of services that should be stopped because they are:
     - Missing required configuration
     - Not enabled by configuration
-    - Handled by external OVS when ovn-chassis plug is connected
 
     Args:
         context: The configuration context dictionary.
@@ -3321,10 +2865,6 @@ def _get_exclude_services(context: dict) -> list[str]:
     """
     exclude_services: list[str] = _services_not_ready(context)
     exclude_services.extend(_services_not_enabled_by_config(context))
-
-    if is_ovs_external():
-        logging.info("External OVS detected, excluding internal OVS services")
-        exclude_services.extend(EXTERNAL_OVS_SERVICES)
 
     logging.warning(f"{exclude_services} are missing required config, stopping")
     return exclude_services
