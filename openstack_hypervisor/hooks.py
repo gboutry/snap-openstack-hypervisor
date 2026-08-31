@@ -4,7 +4,6 @@
 import base64
 import binascii
 import datetime
-import errno
 import glob
 import hashlib
 import json
@@ -12,14 +11,12 @@ import logging
 import math
 import os
 import platform
-import re
 import secrets
 import shutil
 import socket
 import stat
 import string
 import subprocess
-import time
 import typing
 import uuid
 import xml.etree.ElementTree
@@ -34,17 +31,10 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from jinja2 import Environment, FileSystemLoader, Template
 from netifaces import AF_INET, gateways, ifaddresses
-from pyroute2 import IPRoute
-from pyroute2.netlink.exceptions import NetlinkError
 from snaphelpers import Snap, SnapCtl
 from snaphelpers._conf import UnknownConfigKey
 
 from openstack_hypervisor import netplan, pci
-from openstack_hypervisor.bridge_datapath import (
-    OVSCli,
-    OVSCommandError,
-    OVSTimeoutError,
-)
 from openstack_hypervisor.cli import pci_devices
 from openstack_hypervisor.cli.common import (
     EPAOrchestratorError,
@@ -54,14 +44,13 @@ from openstack_hypervisor.cli.common import (
     socket_path,
 )
 from openstack_hypervisor.log import setup_logging
+from openstack_hypervisor.ovs import (
+    OVSCli,
+    OVSCommandError,
+    OVSTimeoutError,
+)
 
 UNSET = ""
-
-# Any configuration read from snap will be a string and
-# an empty string value for IPvAnyNetwork pydantic Field
-# throws an error. So making 0.0.0.0/0 as kind of Empty
-# or None for IPvAnyNetwork.
-IPVANYNETWORK_UNSET = "0.0.0.0/0"
 
 SECRETS = []
 
@@ -346,11 +335,6 @@ DEFAULT_CONFIG = {
     "compute.multipath-forced": False,
     "sev.reserved-host-memory-mb": UNSET,
     # Neutron
-    # These 2 options are deprecated, kept as a compatibility layer
-    "network.physnet-name": "physnet1",
-    "network.external-bridge": "br-ex",
-    "network.external-bridge-address": IPVANYNETWORK_UNSET,
-    "network.bridge-mapping": UNSET,
     "network.dns-servers": "8.8.8.8",
     "network.ovs-dpdk-enabled": False,
     "network.ovs-memory": UNSET,
@@ -365,8 +349,6 @@ DEFAULT_CONFIG = {
     "network.nova-metadata-proxy-url": UNSET,
     "network.enable-gateway": False,
     "network.ip-address": _get_local_ip_by_default_route,  # noqa: F821
-    # Deprecate external nic
-    "network.external-nic": UNSET,
     "network.sriov-nic-exclude-devices": UNSET,
     # Monitoring
     "monitoring.enable": False,
@@ -700,145 +682,6 @@ def _update_default_config(snap: Snap) -> None:
         snap.config.set(missing_options)
 
 
-def _wait_for_interface(interface: str) -> None:
-    """Wait for the interface to be created.
-
-    :param interface: Name of the interface.
-    :type interface: str
-    :return: None
-    """
-    logging.debug(f"Waiting for {interface} to be created")
-    ipr = IPRoute()
-    start = time.monotonic()
-    while not ipr.link_lookup(ifname=interface):
-        if time.monotonic() - start > 30:
-            raise TimeoutError(f"Timed out waiting for {interface} to be created")
-        logging.debug(f"{interface} not found, waiting...")
-        time.sleep(1)
-
-
-def _add_ip_to_interface(interface: str, cidr: str) -> None:
-    """Add IP to interface and set link to up.
-
-    Deletes any existing IPs on the interface and set IP
-    of the interface to cidr.
-
-    :param interface: interface name
-    :type interface: str
-    :param cidr: network address
-    :type cidr: str
-    :return: None
-    """
-    logging.debug(f"Adding  ip {cidr} to {interface}")
-    ipr = IPRoute()
-    dev = ipr.link_lookup(ifname=interface)[0]
-    ip_mask = cidr.split("/")
-    try:
-        ipr.addr("add", index=dev, address=ip_mask[0], mask=int(ip_mask[1]))
-    except NetlinkError as e:
-        if e.code != errno.EEXIST:
-            raise e
-
-    ipr.link("set", index=dev, state="up")
-
-
-def _delete_ips_from_interface(interface: str) -> None:
-    """Remove all IPs from interface."""
-    logging.debug(f"Resetting interface {interface}")
-    ipr = IPRoute()
-    dev = ipr.link_lookup(ifname=interface)[0]
-    ipr.flush_addr(index=dev)
-
-
-def _add_iptable_postrouting_rule(cidr: str, comment: str) -> None:
-    """Add postrouting iptable rule.
-
-    Add new postiprouting iptable rule, if it does not exist, to allow traffic
-    for cidr network.
-    """
-    executable = "iptables-legacy"
-    rule_def = [
-        "POSTROUTING",
-        "-w",
-        "-t",
-        "nat",
-        "-s",
-        cidr,
-        "-j",
-        "MASQUERADE",
-        "-m",
-        "comment",
-        "--comment",
-        comment,
-    ]
-    found = False
-    try:
-        cmd = [executable, "--check"]
-        cmd.extend(rule_def)
-        logging.debug(cmd)
-        subprocess.run(cmd, capture_output=True, check=True)
-    except subprocess.CalledProcessError as e:
-        # --check has an RC of 1 if the rule does not exist
-        if e.returncode == 1 and re.search(r"No.*match by that name", e.stderr.decode()):
-            logging.debug(f"Postrouting iptable rule for {cidr} missing")
-            found = False
-        else:
-            logging.warning(f"Failed to lookup postrouting iptable rule for {cidr}")
-    else:
-        # If not exception was raised then the rule exists.
-        logging.debug(f"Found existing postrouting rule for {cidr}")
-        found = True
-    if not found:
-        logging.debug(f"Adding postrouting iptable rule for {cidr}")
-        cmd = [executable, "--append"]
-        cmd.extend(rule_def)
-        logging.debug(cmd)
-        subprocess.check_call(cmd)
-
-
-def _delete_iptable_postrouting_rule(comment: str) -> None:
-    """Delete postrouting iptable rules based on comment."""
-    logging.debug("Resetting iptable rules added by openstack-hypervisor")
-    if not comment:
-        return
-
-    try:
-        cmd = [
-            "iptables-legacy",
-            "-t",
-            "nat",
-            "-n",
-            "-v",
-            "-L",
-            "POSTROUTING",
-            "--line-numbers",
-        ]
-        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        iptable_rules = process.stdout.strip()
-
-        line_numbers = [
-            line.split(" ")[0] for line in iptable_rules.split("\n") if comment in line
-        ]
-
-        # Delete line numbers in descending order
-        # If a lower numbered line number is deleted, iptables
-        # changes lines numbers of high numbered rules.
-        line_numbers.sort(reverse=True)
-        for number in line_numbers:
-            delete_rule_cmd = [
-                "iptables-legacy",
-                "-t",
-                "nat",
-                "-D",
-                "POSTROUTING",
-                number,
-            ]
-            logging.debug(f"Deleting iptable rule: {delete_rule_cmd}")
-            subprocess.check_call(delete_rule_cmd)
-    except subprocess.CalledProcessError as e:
-        logging.info(f"Error in deletion of IPtable rule: {e.stderr}")
-
-
 def _configure_ovn_base_external_ovs(snap: Snap, ovs_cli: OVSCli, context: dict) -> None:
     """Configure OVS/OVN for external OVS.
 
@@ -959,79 +802,6 @@ def _configure_ovs(snap: Snap, ovs_cli: OVSCli, context: dict) -> bool:
         logging.debug("No OVS DPDK settings provided.")
 
     return config_changed
-
-
-def _add_interface_to_bridge(ovs_cli: OVSCli, external_bridge: str, external_nic: str) -> None:
-    """Add an interface to a given bridge.
-
-    :param ovs_cli: OVSCli instance.
-    :param external_bridge: Name of bridge.
-    :param external_nic: Name of nic.
-    """
-    if external_nic in ovs_cli.list_bridge_interfaces(external_bridge):
-        logging.warning(f"Interface {external_nic} already connected to {external_bridge}")
-    else:
-        logging.warning(f"Adding interface {external_nic} to {external_bridge}")
-        ovs_cli.add_port(
-            external_bridge,
-            external_nic,
-            external_ids={"microstack-function": "ext-port"},
-        )
-
-
-def _del_interface_from_bridge(ovs_cli: OVSCli, external_bridge: str, external_nic: str) -> None:
-    """Remove an interface from  a given bridge.
-
-    :param ovs_cli: OVSCli instance.
-    :param external_bridge: Name of bridge.
-    :param external_nic: Name of nic.
-    """
-    if external_nic in ovs_cli.list_bridge_interfaces(external_bridge):
-        logging.warning(f"Removing interface {external_nic} from {external_bridge}")
-        ovs_cli.del_port(external_bridge, external_nic)
-    else:
-        logging.warning(f"Interface {external_nic} not connected to {external_bridge}")
-
-
-def _get_external_ports_on_bridge(ovs_cli: OVSCli, bridge: str) -> list:
-    """Get microstack managed external port on bridge.
-
-    :param ovs_cli: OVSCli instance.
-    :param bridge: Name of bridge.
-    """
-    output = ovs_cli.find("Port", "external-ids:microstack-function=ext-port")
-    name_idx = output["headings"].index("name")
-    external_nics = [r[name_idx] for r in output["data"]]
-    bridge_ifaces = ovs_cli.list_bridge_interfaces(bridge)
-    return [i for i in bridge_ifaces if i in external_nics]
-
-
-def _ensure_single_nic_on_bridge(ovs_cli: OVSCli, external_bridge: str, external_nic: str) -> None:
-    """Ensure nic is attached to bridge and no other microk8s managed nics.
-
-    :param ovs_cli: OVSCli instance.
-    :param external_bridge: Name of bridge.
-    :param external_nic: Name of nic.
-    """
-    external_ports = _get_external_ports_on_bridge(ovs_cli, external_bridge)
-    if external_nic in external_ports:
-        logging.debug(f"{external_nic} already attached to {external_bridge}")
-    else:
-        _add_interface_to_bridge(ovs_cli, external_bridge, external_nic)
-    for p in external_ports:
-        if p != external_nic:
-            logging.debug(f"Removing additional external port {p} from {external_bridge}")
-            _del_interface_from_bridge(ovs_cli, external_bridge, p)
-
-
-def _del_external_nics_from_bridge(ovs_cli: OVSCli, external_bridge: str) -> None:
-    """Delete all microk8s managed external nics from bridge.
-
-    :param ovs_cli: OVSCli instance.
-    :param external_bridge: Name of bridge.
-    """
-    for p in _get_external_ports_on_bridge(ovs_cli, external_bridge):
-        _del_interface_from_bridge(ovs_cli, external_bridge, p)
 
 
 def _get_datapath_type(context: dict) -> str:

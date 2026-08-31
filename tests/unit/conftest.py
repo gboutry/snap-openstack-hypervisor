@@ -67,35 +67,6 @@ def check_output():
 
 
 @pytest.fixture
-def link_lookup():
-    with patch("pyroute2.IPRoute.link_lookup") as p:
-        yield p
-
-
-@pytest.fixture
-def split():
-    yield "1.2.3.4/24"
-
-
-@pytest.fixture
-def addr():
-    with patch("pyroute2.IPRoute.addr") as p:
-        yield p
-
-
-@pytest.fixture
-def link():
-    with patch("pyroute2.IPRoute.link") as p:
-        yield p
-
-
-@pytest.fixture
-def ip_interface():
-    with patch("ipaddress.ip_interface") as p:
-        yield p
-
-
-@pytest.fixture
 def sleep():
     with patch("time.sleep") as p:
         yield p
@@ -178,10 +149,9 @@ def get_pci_address():
 @pytest.fixture()
 def ovs_cli():
     """Create a mock OVSCli instance for testing."""
-    from openstack_hypervisor.bridge_datapath import OVSCli
+    from openstack_hypervisor.ovs import OVSCli
 
     ovs_cli_instance = MagicMock(spec=OVSCli)
-    ovs_cli_instance.transaction.return_value.__enter__.return_value = ovs_cli_instance
     # Set default switchd_ctl_socket to avoid errors in tests
     ovs_cli_instance.switchd_ctl_socket = "unix:/some/ctl.sock"
     yield ovs_cli_instance

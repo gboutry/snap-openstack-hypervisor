@@ -240,9 +240,7 @@ class TestHooks:
         hooks._get_template(snap, "foo.bar")
         mock_fs_loader.assert_called_once_with(searchpath=str(snap.paths.snap / "templates"))
 
-    def test_configure_hook(
-        self, mocker, snap, check_call, link_lookup, split, addr, link, ip_interface, shutil_chown
-    ):
+    def test_configure_hook(self, mocker, snap, check_call, shutil_chown):
         """Tests the configure hook."""
         mock_template = mocker.Mock()
         mocker.patch.object(hooks, "_secure_copy")
@@ -373,123 +371,6 @@ class TestHooks:
         config["telemetry"] = {"enable": True}
         config["masakari"] = {"enable": True}
         assert hooks._services_not_enabled_by_config(config) == []
-
-    def test_add_interface_to_bridge(self, ovs_cli):
-        ovs_cli.list_bridge_interfaces.return_value = ["int1", "int2"]
-        hooks._add_interface_to_bridge(ovs_cli, "br1", "int3")
-        ovs_cli.add_port.assert_called_once_with(
-            "br1",
-            "int3",
-            external_ids={"microstack-function": "ext-port"},
-        )
-
-    def test_add_interface_to_bridge_noop(self, ovs_cli):
-        ovs_cli.list_bridge_interfaces.return_value = ["int1", "int2"]
-        hooks._add_interface_to_bridge(ovs_cli, "br1", "int2")
-        assert not ovs_cli.add_port.called
-
-    def test_del_interface_from_bridge(self, ovs_cli):
-        ovs_cli.list_bridge_interfaces.return_value = ["int1", "int2"]
-        hooks._del_interface_from_bridge(ovs_cli, "br1", "int2")
-        ovs_cli.del_port.assert_called_once_with("br1", "int2")
-
-    def test_del_interface_from_bridge_noop(self, ovs_cli):
-        ovs_cli.list_bridge_interfaces.return_value = ["int1", "int2"]
-        hooks._del_interface_from_bridge(ovs_cli, "br1", "int3")
-        assert not ovs_cli.del_port.called
-
-    def test_get_external_ports_on_bridge(self, ovs_cli):
-        port_data = {
-            "data": [
-                [
-                    ["uuid", "efd95c01-d658-4847-8506-664eec95e653"],
-                    ["set", []],
-                    0,
-                    False,
-                    ["set", []],
-                    0,
-                    ["set", []],
-                    ["map", [["microk8s-function", "external-nic"]]],
-                    False,
-                    ["uuid", "92f62f7c-53f2-4362-bbd5-9b46b8f88632"],
-                    ["set", []],
-                    ["set", []],
-                    "enp6s0",
-                    ["map", []],
-                    False,
-                    ["set", []],
-                    ["map", []],
-                    ["map", []],
-                    ["map", []],
-                    ["map", []],
-                    ["set", []],
-                    ["set", []],
-                    ["set", []],
-                ]
-            ],
-            "headings": [
-                "_uuid",
-                "bond_active_slave",
-                "bond_downdelay",
-                "bond_fake_iface",
-                "bond_mode",
-                "bond_updelay",
-                "cvlans",
-                "external_ids",
-                "fake_bridge",
-                "interfaces",
-                "lacp",
-                "mac",
-                "name",
-                "other_config",
-                "protected",
-                "qos",
-                "rstp_statistics",
-                "rstp_status",
-                "statistics",
-                "status",
-                "tag",
-                "trunks",
-                "vlan_mode",
-            ],
-        }
-        ovs_cli.find.return_value = port_data
-        ovs_cli.list_bridge_interfaces.return_value = ["enp6s0"]
-        assert hooks._get_external_ports_on_bridge(ovs_cli, "br-ex") == ["enp6s0"]
-        ovs_cli.list_bridge_interfaces.return_value = []
-        assert hooks._get_external_ports_on_bridge(ovs_cli, "br-ex") == []
-
-    def test_ensure_single_nic_on_bridge(self, ovs_cli, mocker):
-        mock_get_external_ports_on_bridge = mocker.patch.object(
-            hooks, "_get_external_ports_on_bridge"
-        )
-        mock_add_interface_to_bridge = mocker.patch.object(hooks, "_add_interface_to_bridge")
-        mock_del_interface_from_bridge = mocker.patch.object(hooks, "_del_interface_from_bridge")
-        mock_get_external_ports_on_bridge.return_value = ["eth0", "eth1"]
-        hooks._ensure_single_nic_on_bridge(ovs_cli, "br-ex", "eth1")
-        assert not mock_add_interface_to_bridge.called
-        mock_del_interface_from_bridge.assert_called_once_with(ovs_cli, "br-ex", "eth0")
-
-        mock_get_external_ports_on_bridge.reset_mock()
-        mock_add_interface_to_bridge.reset_mock()
-        mock_del_interface_from_bridge.reset_mock()
-        mock_get_external_ports_on_bridge.return_value = []
-        hooks._ensure_single_nic_on_bridge(ovs_cli, "br-ex", "eth1")
-        mock_add_interface_to_bridge.assert_called_once_with(ovs_cli, "br-ex", "eth1")
-        assert not mock_del_interface_from_bridge.called
-
-    def test_del_external_nics_from_bridge(self, ovs_cli, mocker):
-        mock_get_external_ports_on_bridge = mocker.patch.object(
-            hooks, "_get_external_ports_on_bridge"
-        )
-        mock_del_interface_from_bridge = mocker.patch.object(hooks, "_del_interface_from_bridge")
-        mock_get_external_ports_on_bridge.return_value = ["eth0", "eth1"]
-        hooks._del_external_nics_from_bridge(ovs_cli, "br-ex")
-        expect = [
-            mock.call(ovs_cli, "br-ex", "eth0"),
-            mock.call(ovs_cli, "br-ex", "eth1"),
-        ]
-        mock_del_interface_from_bridge.assert_has_calls(expect)
 
     def test_set_secret(self, mocker):
         conn_mock = mocker.Mock()
