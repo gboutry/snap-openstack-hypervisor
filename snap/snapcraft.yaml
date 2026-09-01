@@ -223,6 +223,7 @@ apps:
       - ovn-chassis
       - microstack-support
       - firewall-control
+      - shared-memory
 
   neutron-sriov-nic-agent:
     command: 'bin/neutron-sriov-nic-agent-service'
@@ -253,6 +254,7 @@ apps:
       - network-bind
       - firewall-control
       - microstack-support
+      - shared-memory
 
   masakari-instancemonitor:
     command: 'bin/masakari-instancemonitor-service'
@@ -883,3 +885,5 @@ plugs:
   ovn-env:
     interface: content
     target: $SNAP_DATA/microovn/ovn-env
+  shared-memory:
+    private: true
