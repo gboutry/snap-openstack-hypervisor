@@ -226,7 +226,7 @@ class TestNeutronOVNMetadataAgentService:
         tmp_path,
         monkeypatch,
     ):
-        """Service should verify the local OVSDB schema before starting."""
+        """Service should verify MicroOVN's OVSDB schema before starting."""
         monkeypatch.setattr(services_module, "OVSDB_SCHEMA_TIMEOUT", 0, raising=False)
         monkeypatch.setattr(services_module, "OVSDB_SCHEMA_CHECK_INTERVAL", 0, raising=False)
         ovs_socket = tmp_path / "db.sock"

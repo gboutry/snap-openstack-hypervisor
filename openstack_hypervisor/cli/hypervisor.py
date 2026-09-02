@@ -12,7 +12,6 @@ from novaclient import client
 from snaphelpers import Snap, UnknownConfigKey
 
 from openstack_hypervisor import manage_guests
-from openstack_hypervisor.bridge_datapath import OVSCli
 from openstack_hypervisor.cli.common import (
     JSON_FORMAT,
     JSON_INDENT_FORMAT,
@@ -25,6 +24,7 @@ from openstack_hypervisor.hooks import (
     ovs_switch_socket,
     ovs_switchd_ctl_socket,
 )
+from openstack_hypervisor.ovs import OVSCli
 
 if typing.TYPE_CHECKING:
     from novaclient.v2.client import Client

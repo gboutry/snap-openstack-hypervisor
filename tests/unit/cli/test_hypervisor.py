@@ -29,7 +29,6 @@ def mock_ovs_cli():
 class TestDPDKReadyCommand:
     """Tests for the dpdk-ready CLI command."""
 
-    @patch("openstack_hypervisor.hooks.is_connected")
     @patch("openstack_hypervisor.cli.hypervisor.Snap")
     @patch("openstack_hypervisor.cli.hypervisor.OVSCli")
     @patch("openstack_hypervisor.cli.hypervisor.ovs_switch_socket")
@@ -42,7 +41,6 @@ class TestDPDKReadyCommand:
         mock_socket,
         mock_ovs_cli_class,
         mock_snap_class,
-        mock_connected,
     ):
         """Test dpdk-ready command returns 0 when ready."""
         mock_dpdk_ready.return_value = True
@@ -55,7 +53,6 @@ class TestDPDKReadyCommand:
         assert result.exit_code == 0
         assert "DPDK configuration is ready" in result.output
 
-    @patch("openstack_hypervisor.hooks.is_connected")
     @patch("openstack_hypervisor.cli.hypervisor.Snap")
     @patch("openstack_hypervisor.cli.hypervisor.OVSCli")
     @patch("openstack_hypervisor.cli.hypervisor.ovs_switch_socket")
@@ -68,7 +65,6 @@ class TestDPDKReadyCommand:
         mock_socket,
         mock_ovs_cli_class,
         mock_snap_class,
-        mock_connected,
     ):
         """Test dpdk-ready command returns 1 when not ready."""
         mock_dpdk_ready.return_value = False
@@ -81,7 +77,6 @@ class TestDPDKReadyCommand:
         assert result.exit_code == 1
         assert "NOT ready" in result.output
 
-    @patch("openstack_hypervisor.hooks.is_connected")
     @patch("openstack_hypervisor.cli.hypervisor.Snap")
     @patch("openstack_hypervisor.cli.hypervisor.OVSCli")
     @patch("openstack_hypervisor.cli.hypervisor.ovs_switch_socket")
@@ -96,7 +91,6 @@ class TestDPDKReadyCommand:
         mock_socket,
         mock_ovs_cli_class,
         mock_snap_class,
-        mock_connected,
     ):
         """Test dpdk-ready command uses ovs_switch_socket."""
         mock_dpdk_ready.return_value = True

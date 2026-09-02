@@ -8,16 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from snaphelpers import Snap, SnapConfig, SnapServices
 
-from openstack_hypervisor import hooks
-
-
-@pytest.fixture(autouse=True)
-def clear_ovs_external_cache():
-    """Clear the lru_cache on is_ovs_external and reset the managed-by config before each test."""
-    hooks.is_ovs_external.cache_clear()
-    hooks._OVS_MANAGED_BY = hooks.OVS_MANAGED_BY_AUTO
-
-
 libvirt_mock = MagicMock()
 libvirt_mock.VIR_DOMAIN_RUNNING = 1
 libvirt_mock.VIR_DOMAIN_SHUTDOWN = 5
@@ -73,35 +63,6 @@ def check_call():
 @pytest.fixture
 def check_output():
     with patch("subprocess.check_output") as p:
-        yield p
-
-
-@pytest.fixture
-def link_lookup():
-    with patch("pyroute2.IPRoute.link_lookup") as p:
-        yield p
-
-
-@pytest.fixture
-def split():
-    yield "1.2.3.4/24"
-
-
-@pytest.fixture
-def addr():
-    with patch("pyroute2.IPRoute.addr") as p:
-        yield p
-
-
-@pytest.fixture
-def link():
-    with patch("pyroute2.IPRoute.link") as p:
-        yield p
-
-
-@pytest.fixture
-def ip_interface():
-    with patch("ipaddress.ip_interface") as p:
         yield p
 
 
@@ -188,10 +149,9 @@ def get_pci_address():
 @pytest.fixture()
 def ovs_cli():
     """Create a mock OVSCli instance for testing."""
-    from openstack_hypervisor.bridge_datapath import OVSCli
+    from openstack_hypervisor.ovs import OVSCli
 
     ovs_cli_instance = MagicMock(spec=OVSCli)
-    ovs_cli_instance.transaction.return_value.__enter__.return_value = ovs_cli_instance
     # Set default switchd_ctl_socket to avoid errors in tests
     ovs_cli_instance.switchd_ctl_socket = "unix:/some/ctl.sock"
     yield ovs_cli_instance

@@ -5,6 +5,12 @@ This repository contains the source for the the OpenStack Hypervisor snap.
 This snap is designed to be used with a deployed OpenStack Control plane such
 as delivered by Sunbeam.
 
+## MicroOVN networking
+
+OpenStack Hypervisor configures Open vSwitch through MicroOVN. Connect the
+`ovn-chassis` content interface to provide the chassis socket; networking
+configuration is applied when MicroOVN is ready.
+
 ## Getting Started
 
 To get started with the OpenStack Hypervisor, install the snap using snapd:
@@ -176,11 +182,6 @@ Configuration of options related to networking, including Neutron
 and OVN:
 
 * `network.dns-servers` External DNS servers to use for forwarding DNS requests
-
-* `network.external-bridge` (`br-ex`)  Name of OVS external network bridge (Deprecated)
-* `network.physnet-name` (`physnet1`) Neutron label for physical network (Deprecated)
-* `network.bridge-mapping` Mapping of bridge to physnet to iface, format:
-  `<bridge>:<physnet>[:<interface>] <bridge2>:<physnet2>[:<interface2>]`
 
 * `network.ip-address` (`node.ip-address`) IP address to use for overlay network endpoints
 * `network.ovn-sb-connection` (`tcp:127.0.0.1:6642`) OVN Southbound DB connection URL
